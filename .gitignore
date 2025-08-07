@@ -1,0 +1,8 @@
+**/__pycache__/
+*/figs
+/t-PatchGNN/data/physionet/raw
+/t-PatchGNN/data/activity/raw
+/t-PatchGNN/data/physionet/processed
+*.zip
+*.csv
+*.log
