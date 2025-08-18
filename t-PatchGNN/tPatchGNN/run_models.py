@@ -125,7 +125,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 # Handle npatch calculation differently for different models
-if args.model == "tAPN":
+if args.model in ["tAPN", "APNTSMixer"]:
     # For tAPN: use specified npatch or default to 20 adaptive patches (updated clarified default)
     if args.npatch is None:
         args.npatch = 20  # Default adaptive patches
