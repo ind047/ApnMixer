@@ -15,7 +15,7 @@ from sklearn import model_selection
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 import lib.utils as utils
 from lib.parse_datasets import parse_datasets
 from lib.evaluation import compute_all_losses, evaluation
@@ -82,7 +82,12 @@ parser.add_argument(
     default="physionet",
     help="Dataset to load. Available: physionet, mimic, ushcn",
 )
-
+parser.add_argument(
+    "--use_attention",
+    type=bool,
+    default=True,
+    help="Whether to use attention mechanism in the model.",
+)
 # value 0 means using original time granularity, Value 1 means quantization by 1 hour,
 # value 0.1 means quantization by 0.1 hour = 6 min, value 0.016 means quantization by 0.016 hour = 1 min
 parser.add_argument(
@@ -236,7 +241,11 @@ if __name__ == "__main__":
     logger.info(input_command)
     logger.info(args)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    # optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=5, verbose=True
+    )
 
     num_batches = data_obj["n_train_batches"]  # n_sample / batch_size
     print("n_train_batches:", num_batches)
@@ -253,6 +262,10 @@ if __name__ == "__main__":
             batch_dict = utils.get_next_batch(data_obj["train_dataloader"])
             train_res = compute_all_losses(model, batch_dict)
             train_res["loss"].backward()
+
+            # Add gradient clipping here (optional but recommended)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             optimizer.step()
 
         ### Validation ###
@@ -269,6 +282,9 @@ if __name__ == "__main__":
                 test_res = evaluation(
                     model, data_obj["test_dataloader"], data_obj["n_test_batches"]
                 )
+
+            # ADD THE SCHEDULER STEP HERE - after validation evaluation
+            scheduler.step(val_res["mse"])  # Step based on validation MSE
 
             logger.info("- Epoch {:03d}, ExpID {}".format(itr, experimentID))
             logger.info(

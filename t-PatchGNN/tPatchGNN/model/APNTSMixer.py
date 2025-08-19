@@ -26,9 +26,9 @@ class AdaptiveMixerBlock(nn.Module):
         self.patch_mlp = nn.Sequential(
             nn.Linear(num_patches, num_patches * expansion_factor),
             nn.GELU(),
-            nn.Dropout(dropout),
+            nn.Dropout(0.1),
             nn.Linear(num_patches * expansion_factor, num_patches),
-            nn.Dropout(dropout),
+            nn.Dropout(0.1),
         )
 
         # Channel mixing: mix across different time series (vital signs)
@@ -62,6 +62,32 @@ class AdaptiveMixerBlock(nn.Module):
         x = x + residual  # Residual connection
 
         return x
+
+
+class LightweightAttentionAggregation(nn.Module):
+    """Lightweight attention for patch aggregation - doesn't change core architecture"""
+
+    def __init__(self, d_model, n_patches):
+        super().__init__()
+        # Simple attention mechanism
+        self.attention_weights = nn.Linear(d_model, 1)
+        self.patch_pos_embed = nn.Parameter(torch.randn(n_patches, d_model) * 0.1)
+
+    def forward(self, h_p):
+        # h_p: (B, D, P, d_model)
+        B, D, P, d_model = h_p.shape
+
+        # Add positional embeddings
+        h_p = h_p + self.patch_pos_embed.unsqueeze(0).unsqueeze(0)
+
+        # Compute attention scores for each patch
+        attention_scores = self.attention_weights(h_p)  # (B, D, P, 1)
+        attention_weights = torch.softmax(attention_scores, dim=2)  # (B, D, P, 1)
+
+        # Weighted sum instead of mean
+        h_final = (h_p * attention_weights).sum(dim=2)  # (B, D, d_model)
+
+        return h_final
 
 
 class APNTSMixer(nn.Module):
@@ -99,12 +125,31 @@ class APNTSMixer(nn.Module):
 
         self.norm = nn.LayerNorm(self.d_model)
 
+        # ADD ONLY THIS: Attention aggregation (optional)
+        self.use_attention = getattr(args, "use_attention", True)  # Can be toggled
+        if self.use_attention:
+            self.attention_aggregation = LightweightAttentionAggregation(
+                self.d_model, self.n_patches
+            )
+
         # Custom decoder
+        # self.decoder = nn.Sequential(
+        #     nn.Linear(self.d_model + self.d_te, self.d_model),
+        #     nn.ReLU(inplace=True),
+        #     nn.Linear(self.d_model, 1),
+        # )
         self.decoder = nn.Sequential(
             nn.Linear(self.d_model + self.d_te, self.d_model),
             nn.ReLU(inplace=True),
-            nn.Linear(self.d_model, 1),
+            nn.Dropout(0.1),
+            nn.Linear(self.d_model, self.d_model // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.d_model // 2, 1),
         )
+
+        # Add learning rate scheduler support
+        self.warmup_epochs = 10
+        self.max_lr = args.lr
 
     def forecasting(self, t_pred, x, t, mask):
         # Same preprocessing as before...
@@ -142,9 +187,13 @@ class APNTSMixer(nn.Module):
         # Apply final normalization
         mixer_output_final = self.norm(mixer_output)
 
-        # Continue with aggregation and decoding
-        h_final = mixer_output_final.mean(dim=2)  # (B, D, d_model)
+        # ONLY THIS LINE CHANGES: Replace simple mean with attention
+        if self.use_attention:
+            h_final = self.attention_aggregation(mixer_output_final)  # (B, D, d_model)
+        else:
+            h_final = mixer_output_final.mean(dim=2)  # Original simple mean
 
+        # Continue with aggregation and decoding
         Lp = t_pred.shape[1]
         h_final_re = h_final.unsqueeze(2).repeat(1, 1, Lp, 1)
         t_pred_re = t_pred.unsqueeze(1).unsqueeze(-1).repeat(1, D, 1, 1)
