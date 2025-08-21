@@ -97,8 +97,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--use_attention",
-    type=bool,
-    default=False,
+    action="store_true",  # Better for boolean flags
     help="Whether to use attention mechanism in the model.",
 )
 # value 0 means using original time granularity, Value 1 means quantization by 1 hour,
@@ -309,7 +308,7 @@ def get_apn_tsmixer_search_space():
 
 def run_ray_tune_optimization(args):
     """
-    Run Ray Tune hyperparameter optimization for APNTSMixer.
+    Run Ray Tune hyperparameter optimization using the older, more stable API.
     """
     if not RAY_AVAILABLE:
         print("Ray Tune is not available. Please install with: pip install ray[tune]")
@@ -331,50 +330,48 @@ def run_ray_tune_optimization(args):
     )
 
     # Configure search algorithm
-    search_alg = OptunaSearch(metric="mse", mode="min")
+    try:
+        search_alg = OptunaSearch(metric="mse", mode="min")
+    except Exception as e:
+        print(f"Optuna not available, using default search: {e}")
+        search_alg = None
 
-    # Configure the tuner with updated API
-    tuner = tune.Tuner(
-        tune.with_parameters(train_apn_tsmixer_with_tune, base_args=args),
-        tune_config=tune.TuneConfig(
-            scheduler=scheduler,
-            search_alg=search_alg,
-            num_samples=args.tune_samples,
-        ),
-        param_space=search_space,
-        run_config=ray.air.RunConfig(
-            name=f"apn_tsmixer_tune_{args.dataset}",
-            storage_path="./ray_results",  # Updated from local_dir to storage_path
-            stop={"training_iteration": args.tune_epochs},
-            checkpoint_config=ray.air.CheckpointConfig(
-                checkpoint_frequency=10,
-                checkpoint_at_end=True,
-            ),
-        ),
-    )
-
-    # Run the tuning
+    # Use the older, more stable tune.run API
     print(f"Starting Ray Tune optimization with {args.tune_samples} trials...")
     print(f"Search space: {search_space}")
 
-    results = tuner.fit()
+    analysis = tune.run(
+        tune.with_parameters(train_apn_tsmixer_with_tune, base_args=args),
+        config=search_space,
+        scheduler=scheduler,
+        search_alg=search_alg,
+        num_samples=args.tune_samples,
+        local_dir="./ray_results",  # This works with the older API
+        name=f"apn_tsmixer_tune_{args.dataset}",
+        stop={"training_iteration": args.tune_epochs},
+        verbose=1,
+        resume="AUTO",
+        resources_per_trial={"cpu": 1, "gpu": 0.5 if torch.cuda.is_available() else 0},
+    )
 
     # Get best result
-    best_result = results.get_best_result("mse", "min")
+    best_trial = analysis.get_best_trial("mse", "min")
 
     print("\n" + "=" * 60)
     print("RAY TUNE OPTIMIZATION RESULTS")
     print("=" * 60)
-    print(f"Best trial config: {best_result.config}")
-    print(f"Best trial final validation MSE: {best_result.metrics['mse']:.6f}")
-    print(f"Best trial final validation MAE: {best_result.metrics['mae']:.6f}")
-    print(f"Best trial final validation RMSE: {best_result.metrics['rmse']:.6f}")
-    print(f"Best trial final validation MAPE: {best_result.metrics['mape'] * 100:.2f}%")
-    print(f"Best trial reached epoch: {best_result.metrics['epoch']}")
+    print(f"Best trial config: {best_trial.config}")
+    print(f"Best trial final validation MSE: {best_trial.last_result['mse']:.6f}")
+    print(f"Best trial final validation MAE: {best_trial.last_result['mae']:.6f}")
+    print(f"Best trial final validation RMSE: {best_trial.last_result['rmse']:.6f}")
+    print(
+        f"Best trial final validation MAPE: {best_trial.last_result['mape'] * 100:.2f}%"
+    )
+    print(f"Best trial reached epoch: {best_trial.last_result['epoch']}")
     print("=" * 60)
 
     # Generate command line for best config
-    best_config = best_result.config
+    best_config = best_trial.config
     cmd_parts = [
         "python run_models.py",
         f"--dataset {args.dataset}",
@@ -386,7 +383,7 @@ def run_ray_tune_optimization(args):
         cmd_parts.append(f"--{key} {value}")
 
     best_command = " ".join(cmd_parts)
-    print(f"\n Command to run best configuration:")
+    print(f"\n🚀 Command to run best configuration:")
     print(best_command)
 
     # Save best config to file
@@ -394,12 +391,12 @@ def run_ray_tune_optimization(args):
     with open(best_config_path, "w") as f:
         f.write("Best hyperparameter configuration:\n")
         f.write("=" * 40 + "\n")
-        for key, value in best_result.config.items():
+        for key, value in best_config.items():
             f.write(f"{key}: {value}\n")
-        f.write(f"\nFinal validation MSE: {best_result.metrics['mse']:.6f}\n")
-        f.write(f"Final validation MAE: {best_result.metrics['mae']:.6f}\n")
-        f.write(f"Final validation RMSE: {best_result.metrics['rmse']:.6f}\n")
-        f.write(f"Final validation MAPE: {best_result.metrics['mape'] * 100:.2f}%\n")
+        f.write(f"\nFinal validation MSE: {best_trial.last_result['mse']:.6f}\n")
+        f.write(f"Final validation MAE: {best_trial.last_result['mae']:.6f}\n")
+        f.write(f"Final validation RMSE: {best_trial.last_result['rmse']:.6f}\n")
+        f.write(f"Final validation MAPE: {best_trial.last_result['mape'] * 100:.2f}%\n")
         f.write(f"\nBest command to run:\n")
         f.write(f"{best_command}\n")
 
@@ -408,7 +405,7 @@ def run_ray_tune_optimization(args):
     # Shutdown Ray
     ray.shutdown()
 
-    return best_result
+    return best_trial
 
 
 #####################################################################################################
