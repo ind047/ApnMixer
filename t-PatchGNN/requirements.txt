@@ -7,3 +7,5 @@ psycopg2-binary
 scipy==1.11.3
 torchvision==0.15.1
 reformer_pytorch==1.4.4
+ray[tune]
+tensorboard-data-sampler

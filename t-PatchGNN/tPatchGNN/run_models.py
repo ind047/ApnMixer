@@ -15,12 +15,13 @@ from sklearn import model_selection
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 import lib.utils as utils
 from lib.parse_datasets import parse_datasets
 from lib.evaluation import compute_all_losses, evaluation
 from model.tPatchGNN import tPatchGNN
 from model.APN import tAPN
+from model.APNTSMixer import APNTSMixer
 
 parser = argparse.ArgumentParser("IMTS Forecasting")
 
@@ -30,8 +31,12 @@ parser.add_argument("--hop", type=int, default=1, help="hops in GNN")
 parser.add_argument("--nhead", type=int, default=1, help="heads in Transformer")
 parser.add_argument("--tf_layer", type=int, default=1, help="# of layer in Transformer")
 parser.add_argument("--nlayer", type=int, default=1, help="# of layer in TSmodel")
-parser.add_argument("--epoch", type=int, default=1000, help="training epoches")
-parser.add_argument("--patience", type=int, default=10, help="patience for early stop")
+parser.add_argument(
+    "--epoch", type=int, default=200, help="training epochs (updated default)"
+)
+parser.add_argument(
+    "--patience", type=int, default=10, help="early stopping patience (updated default)"
+)
 parser.add_argument(
     "--history",
     type=int,
@@ -46,9 +51,20 @@ parser.add_argument(
 )
 parser.add_argument("--logmode", type=str, default="a", help="File mode of logging.")
 
-parser.add_argument("--lr", type=float, default=1e-3, help="Starting learning rate.")
+parser.add_argument(
+    "--lr",
+    type=float,
+    default=1e-2,
+    help="Starting learning rate (updated default 1e-2).",
+)
 parser.add_argument("--w_decay", type=float, default=0.0, help="weight decay.")
-parser.add_argument("-b", "--batch_size", type=int, default=32)
+parser.add_argument(
+    "-b",
+    "--batch_size",
+    type=int,
+    default=256,
+    help="Training batch size (updated default 256).",
+)
 
 parser.add_argument(
     "--save", type=str, default="experiments/", help="Path for save checkpoints"
@@ -66,7 +82,12 @@ parser.add_argument(
     default="physionet",
     help="Dataset to load. Available: physionet, mimic, ushcn",
 )
-
+parser.add_argument(
+    "--use_attention",
+    type=bool,
+    default=False,
+    help="Whether to use attention mechanism in the model.",
+)
 # value 0 means using original time granularity, Value 1 means quantization by 1 hour,
 # value 0.1 means quantization by 0.1 hour = 6 min, value 0.016 means quantization by 0.016 hour = 1 min
 parser.add_argument(
@@ -80,7 +101,7 @@ parser.add_argument(
     type=str,
     default="tPatchGNN",
     help="Model name",
-    choices=["tPatchGNN", "tAPN"],
+    choices=["tPatchGNN", "tAPN", "APNTSMixer"],
 )
 parser.add_argument("--outlayer", type=str, default="Linear", help="Model name")
 parser.add_argument(
@@ -109,10 +130,10 @@ parser.add_argument(
 args = parser.parse_args()
 
 # Handle npatch calculation differently for different models
-if args.model == "tAPN":
-    # For tAPN: use specified npatch or default to 4 adaptive patches
+if args.model in ["tAPN", "APNTSMixer"]:
+    # For tAPN: use specified npatch or default to 20 adaptive patches (updated clarified default)
     if args.npatch is None:
-        args.npatch = 20  # Default to 4 adaptive patches for better performance
+        args.npatch = 20  # Default adaptive patches
 else:
     # For tPatchGNN: calculate npatch from patch_size and stride (original behavior)
     if args.npatch is None:
@@ -146,22 +167,22 @@ if __name__ == "__main__":
 
     ##################################################################
     # For tAPN: Allow full temporal extent, don't constrain by history
-    if args.model == "tAPN":
+    if args.model in ["tAPN", "APNTSMixer"]:
         # For tAPN, we want to use more of the available temporal data
         # Set history to a larger value to capture more temporal context
         if args.t_obs is None:
             # Set t_obs to allow adaptive patching over a larger window
-            args.t_obs = args.history * 2  # Use 2x the history for adaptive patching
-
-        # Use a larger history window for tAPN to get more temporal data
-        original_history = args.history
-        args.history = min(args.history * 3, 72)  # Use up to 3x history (max 72 hours)
+            # args.t_obs = args.history * 2  # Use 2x the history for adaptive patching
+            args.t_obs = args.history
+        # # Use a larger history window for tAPN to get more temporal data
+        # original_history = args.history
+        # args.history = min(args.history * 3, 72)  # Use up to 3x history (max 72 hours)
         data_obj = parse_datasets(args, patch_ts=False)
-        args.history = original_history  # Restore for logging
+        # args.history = original_history  # Restore for logging
 
-        print(
-            f"tAPN: Using extended temporal window (history={min(original_history * 3, 72)}) with t_obs={args.t_obs} for adaptive patching"
-        )
+        # print(
+        #     f"tAPN: Using extended temporal window (history={min(original_history * 3, 72)}) with t_obs={args.t_obs} for adaptive patching"
+        # )
     else:
         # For tPatchGNN: use standard history-based windowing
         if args.t_obs is None:
@@ -175,6 +196,8 @@ if __name__ == "__main__":
         model = tPatchGNN(args).to(args.device)
     elif args.model == "tAPN":
         model = tAPN(args).to(args.device)
+    elif args.model == "APNTSMixer":
+        model = APNTSMixer(args).to(args.device)
 
     ##################################################################
 
@@ -190,6 +213,15 @@ if __name__ == "__main__":
         log_path = "logs/{}_{}_{}.log".format(args.dataset, args.model, args.state)
     else:
         if args.model == "tAPN":
+            log_path = "logs/{}_{}_{}_{}patch_{}layer_{}lr.log".format(
+                args.dataset,
+                args.model,
+                args.state,
+                args.npatch,
+                args.nlayer,
+                args.lr,
+            )
+        elif args.model == "APNTSMixer":
             log_path = "logs/{}_{}_{}_{}patch_{}layer_{}lr.log".format(
                 args.dataset,
                 args.model,
@@ -218,7 +250,11 @@ if __name__ == "__main__":
     logger.info(input_command)
     logger.info(args)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    # optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=args.patience
+    )
 
     num_batches = data_obj["n_train_batches"]  # n_sample / batch_size
     print("n_train_batches:", num_batches)
@@ -235,6 +271,10 @@ if __name__ == "__main__":
             batch_dict = utils.get_next_batch(data_obj["train_dataloader"])
             train_res = compute_all_losses(model, batch_dict)
             train_res["loss"].backward()
+
+            # Add gradient clipping here (optional but recommended)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             optimizer.step()
 
         ### Validation ###
@@ -251,6 +291,9 @@ if __name__ == "__main__":
                 test_res = evaluation(
                     model, data_obj["test_dataloader"], data_obj["n_test_batches"]
                 )
+
+            # ADD THE SCHEDULER STEP HERE - after validation evaluation
+            scheduler.step(val_res["mse"])  # Step based on validation MSE
 
             logger.info("- Epoch {:03d}, ExpID {}".format(itr, experimentID))
             logger.info(
