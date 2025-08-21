@@ -18,6 +18,19 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 import lib.utils as utils
 from lib.parse_datasets import parse_datasets
+
+# Ray Tune imports
+try:
+    import ray
+    from ray import tune
+    from ray.tune.schedulers import ASHAScheduler
+    from ray.tune.search.optuna import OptunaSearch
+
+    RAY_AVAILABLE = True
+except ImportError:
+    RAY_AVAILABLE = False
+    print("Ray Tune not available. Install with: pip install ray[tune]")
+
 from lib.evaluation import compute_all_losses, evaluation
 from model.tPatchGNN import tPatchGNN
 from model.APN import tAPN
@@ -127,6 +140,37 @@ parser.add_argument(
     help="Number of patches (for tAPN) or auto-calculated (for tPatchGNN)",
 )
 
+# Ray Tune parameters
+parser.add_argument(
+    "--use_ray_tune",
+    action="store_true",
+    help="Enable Ray Tune hyperparameter optimization",
+)
+parser.add_argument(
+    "--tune_samples",
+    type=int,
+    default=50,
+    help="Number of hyperparameter combinations to try",
+)
+parser.add_argument(
+    "--tune_epochs",
+    type=int,
+    default=30,
+    help="Maximum epochs per trial",
+)
+parser.add_argument(
+    "--tune_grace_period",
+    type=int,
+    default=5,
+    help="Minimum epochs before early stopping",
+)
+parser.add_argument(
+    "--tune_reduction_factor",
+    type=int,
+    default=2,
+    help="Reduction factor for halving scheduler",
+)
+
 args = parser.parse_args()
 
 # Handle npatch calculation differently for different models
@@ -147,8 +191,228 @@ print("PID, device:", args.PID, args.device)
 
 #####################################################################################################
 
+
+def train_apn_tsmixer_with_tune(config, base_args):
+    """
+    Trainable function for Ray Tune hyperparameter optimization of APNTSMixer.
+    """
+    # Merge config with base args
+    args = argparse.Namespace(**vars(base_args))
+
+    # Update args with Ray Tune config
+    for key, value in config.items():
+        setattr(args, key, value)
+
+    # Setup device and seed
+    args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    utils.setup_seed(args.seed)
+
+    # Load dataset
+    if args.model in ["tAPN", "APNTSMixer"]:
+        if args.t_obs is None:
+            args.t_obs = args.history
+        data_obj = parse_datasets(args, patch_ts=False)
+    else:
+        if args.t_obs is None:
+            args.t_obs = args.history
+        data_obj = parse_datasets(args, patch_ts=True)
+
+    input_dim = data_obj["input_dim"]
+    args.ndim = input_dim
+
+    # Initialize model
+    if args.model == "APNTSMixer":
+        model = APNTSMixer(args).to(args.device)
+    elif args.model == "tAPN":
+        model = tAPN(args).to(args.device)
+    elif args.model == "tPatchGNN":
+        model = tPatchGNN(args).to(args.device)
+
+    # Initialize optimizer and scheduler
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.w_decay)
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=args.patience
+    )
+
+    num_batches = data_obj["n_train_batches"]
+    best_val_mse = np.inf
+    best_epoch = 0
+
+    # Training loop
+    for epoch in range(args.tune_epochs):
+        # Training
+        model.train()
+        for _ in range(num_batches):
+            optimizer.zero_grad()
+            batch_dict = utils.get_next_batch(data_obj["train_dataloader"])
+            train_res = compute_all_losses(model, batch_dict)
+            train_res["loss"].backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+        # Validation
+        model.eval()
+        with torch.no_grad():
+            val_res = evaluation(
+                model, data_obj["val_dataloader"], data_obj["n_val_batches"]
+            )
+
+        scheduler.step(val_res["mse"])
+
+        # Track best validation performance
+        if val_res["mse"] < best_val_mse:
+            best_val_mse = val_res["mse"]
+            best_epoch = epoch
+
+        # Report to Ray Tune
+        tune.report(
+            mse=val_res["mse"],
+            mae=val_res["mae"],
+            rmse=val_res["rmse"],
+            mape=val_res["mape"],
+            loss=val_res["loss"],
+            epoch=epoch,
+            best_mse=best_val_mse,
+            best_epoch=best_epoch,
+        )
+
+        # Early stopping for this trial
+        if epoch - best_epoch >= args.patience:
+            break
+
+
+def get_apn_tsmixer_search_space():
+    """
+    Define the hyperparameter search space for APNTSMixer optimization.
+    """
+    search_space = {
+        # Learning rate
+        "lr": tune.loguniform(1e-4, 1e-1),
+        # Weight decay
+        "w_decay": tune.uniform(0.0, 0.1),
+        # Hidden dimension
+        "hid_dim": tune.choice([32, 64, 96, 128]),
+        # Number of layers
+        "nlayer": tune.choice([1, 2, 3, 4]),
+        # Number of patches for adaptive patching
+        "npatch": tune.choice([16, 20, 24, 40]),
+        # Batch size
+        "batch_size": tune.choice([64, 128, 256]),
+        # Attention mechanism flag
+        "use_attention": tune.choice([True, False]),
+        # Patience for early stopping
+        "patience": tune.choice([5, 8, 10, 12]),
+    }
+
+    return search_space
+
+
+def run_ray_tune_optimization(args):
+    """
+    Run Ray Tune hyperparameter optimization for APNTSMixer.
+    """
+    if not RAY_AVAILABLE:
+        print("Ray Tune is not available. Please install with: pip install ray[tune]")
+        return
+
+    # Initialize Ray
+    ray.init(ignore_reinit_error=True)
+
+    # Get search space
+    search_space = get_apn_tsmixer_search_space()
+
+    # Configure scheduler for early stopping
+    scheduler = ASHAScheduler(
+        metric="mse",
+        mode="min",
+        max_t=args.tune_epochs,
+        grace_period=args.tune_grace_period,
+        reduction_factor=args.tune_reduction_factor,
+    )
+
+    # Configure search algorithm
+    search_alg = OptunaSearch(metric="mse", mode="min")
+
+    # Configure the tuner
+    tuner = tune.Tuner(
+        tune.with_parameters(train_apn_tsmixer_with_tune, base_args=args),
+        tune_config=tune.TuneConfig(
+            scheduler=scheduler,
+            search_alg=search_alg,
+            num_samples=args.tune_samples,
+        ),
+        param_space=search_space,
+        run_config=ray.air.RunConfig(
+            name=f"apn_tsmixer_tune_{args.dataset}",
+            local_dir="./ray_results",
+            stop={"training_iteration": args.tune_epochs},
+            checkpoint_config=ray.air.CheckpointConfig(
+                checkpoint_frequency=10,
+                checkpoint_at_end=True,
+            ),
+        ),
+    )
+
+    # Run the tuning
+    print(f"Starting Ray Tune optimization with {args.tune_samples} trials...")
+    print(f"Search space: {search_space}")
+
+    results = tuner.fit()
+
+    # Get best result
+    best_result = results.get_best_result("mse", "min")
+
+    print("\n" + "=" * 60)
+    print("RAY TUNE OPTIMIZATION RESULTS")
+    print("=" * 60)
+    print(f"Best trial config: {best_result.config}")
+    print(f"Best trial final validation MSE: {best_result.metrics['mse']:.6f}")
+    print(f"Best trial final validation MAE: {best_result.metrics['mae']:.6f}")
+    print(f"Best trial final validation RMSE: {best_result.metrics['rmse']:.6f}")
+    print(f"Best trial final validation MAPE: {best_result.metrics['mape'] * 100:.2f}%")
+    print(f"Best trial reached epoch: {best_result.metrics['epoch']}")
+    print("=" * 60)
+
+    # Save best config to file
+    best_config_path = f"best_config_{args.dataset}_{args.model}.txt"
+    with open(best_config_path, "w") as f:
+        f.write("Best hyperparameter configuration:\n")
+        f.write("=" * 40 + "\n")
+        for key, value in best_result.config.items():
+            f.write(f"{key}: {value}\n")
+        f.write(f"\nFinal validation MSE: {best_result.metrics['mse']:.6f}\n")
+        f.write(f"Final validation MAE: {best_result.metrics['mae']:.6f}\n")
+        f.write(f"Final validation RMSE: {best_result.metrics['rmse']:.6f}\n")
+        f.write(f"Final validation MAPE: {best_result.metrics['mape'] * 100:.2f}%\n")
+
+    print(f"Best configuration saved to: {best_config_path}")
+
+    # Shutdown Ray
+    ray.shutdown()
+
+    return best_result
+
+
+#####################################################################################################
+
 if __name__ == "__main__":
     utils.setup_seed(args.seed)
+
+    # Check if Ray Tune optimization is requested
+    if args.use_ray_tune:
+        if args.model != "APNTSMixer":
+            print(
+                "Ray Tune optimization is currently only supported for APNTSMixer model."
+            )
+            print("Please set --model APNTSMixer to use Ray Tune.")
+            sys.exit(1)
+
+        print("Starting Ray Tune hyperparameter optimization for APNTSMixer...")
+        best_result = run_ray_tune_optimization(args)
+
+        print("\nRay Tune optimization completed!")
+        print("Use the best configuration found above to train your final model.")
+        sys.exit(0)
 
     experimentID = args.load
     if experimentID is None:
