@@ -253,7 +253,7 @@ if __name__ == "__main__":
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     scheduler = ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=5, verbose=True
+        optimizer, mode="min", factor=0.5, patience=args.patience
     )
 
     num_batches = data_obj["n_train_batches"]  # n_sample / batch_size
