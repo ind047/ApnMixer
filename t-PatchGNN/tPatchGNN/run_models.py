@@ -221,6 +221,15 @@ if __name__ == "__main__":
                 args.nlayer,
                 args.lr,
             )
+        elif args.model == "APNTSMixer":
+            log_path = "logs/{}_{}_{}_{}patch_{}layer_{}lr.log".format(
+                args.dataset,
+                args.model,
+                args.state,
+                args.npatch,
+                args.nlayer,
+                args.lr,
+            )
         else:
             log_path = "logs/{}_{}_{}_{}patch_{}stride_{}layer_{}lr.log".format(
                 args.dataset,
