@@ -333,7 +333,7 @@ def run_ray_tune_optimization(args):
     # Configure search algorithm
     search_alg = OptunaSearch(metric="mse", mode="min")
 
-    # Configure the tuner
+    # Configure the tuner with updated API
     tuner = tune.Tuner(
         tune.with_parameters(train_apn_tsmixer_with_tune, base_args=args),
         tune_config=tune.TuneConfig(
@@ -344,7 +344,7 @@ def run_ray_tune_optimization(args):
         param_space=search_space,
         run_config=ray.air.RunConfig(
             name=f"apn_tsmixer_tune_{args.dataset}",
-            local_dir="./ray_results",
+            storage_path="./ray_results",  # Updated from local_dir to storage_path
             stop={"training_iteration": args.tune_epochs},
             checkpoint_config=ray.air.CheckpointConfig(
                 checkpoint_frequency=10,
@@ -373,6 +373,22 @@ def run_ray_tune_optimization(args):
     print(f"Best trial reached epoch: {best_result.metrics['epoch']}")
     print("=" * 60)
 
+    # Generate command line for best config
+    best_config = best_result.config
+    cmd_parts = [
+        "python run_models.py",
+        f"--dataset {args.dataset}",
+        f"--model APNTSMixer",
+        f"--epoch 200",  # Full training
+    ]
+
+    for key, value in best_config.items():
+        cmd_parts.append(f"--{key} {value}")
+
+    best_command = " ".join(cmd_parts)
+    print(f"\n Command to run best configuration:")
+    print(best_command)
+
     # Save best config to file
     best_config_path = f"best_config_{args.dataset}_{args.model}.txt"
     with open(best_config_path, "w") as f:
@@ -384,6 +400,8 @@ def run_ray_tune_optimization(args):
         f.write(f"Final validation MAE: {best_result.metrics['mae']:.6f}\n")
         f.write(f"Final validation RMSE: {best_result.metrics['rmse']:.6f}\n")
         f.write(f"Final validation MAPE: {best_result.metrics['mape'] * 100:.2f}%\n")
+        f.write(f"\nBest command to run:\n")
+        f.write(f"{best_command}\n")
 
     print(f"Best configuration saved to: {best_config_path}")
 
@@ -408,7 +426,11 @@ if __name__ == "__main__":
             sys.exit(1)
 
         print("Starting Ray Tune hyperparameter optimization for APNTSMixer...")
-        best_result = run_ray_tune_optimization(args)
+
+        # Use the updated function (choose one):
+        best_result = run_ray_tune_optimization(args)  # Use the fixed version
+        # OR
+        # best_result = run_ray_tune_optimization_simple(args)  # Use the simpler version
 
         print("\nRay Tune optimization completed!")
         print("Use the best configuration found above to train your final model.")
