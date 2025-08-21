@@ -308,21 +308,38 @@ def get_apn_tsmixer_search_space():
 
 def run_ray_tune_optimization(args):
     """
-    Run Ray Tune hyperparameter optimization using the updated API.
+    Run Ray Tune hyperparameter optimization with proper worker environment setup.
     """
     if not RAY_AVAILABLE:
         print("Ray Tune is not available. Please install with: pip install ray[tune]")
         return
 
-    # Initialize Ray
-    ray.init(ignore_reinit_error=True)
+    # Initialize Ray with proper worker environment
+    import os
+    import sys
+
+    current_dir = os.getcwd()
+    parent_dir = os.path.dirname(current_dir)
+
+    # Make sure Ray workers have access to the required modules
+    runtime_env = {
+        "working_dir": current_dir,
+        "py_modules": [current_dir, parent_dir],
+        "env_vars": {"PYTHONPATH": f"{current_dir}:{parent_dir}"},
+    }
+
+    try:
+        ray.init(ignore_reinit_error=True, runtime_env=runtime_env)
+    except Exception as e:
+        print(f"Ray init with runtime_env failed, trying basic init: {e}")
+        ray.init(ignore_reinit_error=True)
 
     # Get search space
     search_space = get_apn_tsmixer_search_space()
 
     # Configure scheduler for early stopping
     scheduler = ASHAScheduler(
-        metric="mse",
+        metric="best_mse",  # Changed from "mse" to "best_mse"
         mode="min",
         max_t=args.tune_epochs,
         grace_period=args.tune_grace_period,
@@ -331,93 +348,118 @@ def run_ray_tune_optimization(args):
 
     # Configure search algorithm
     try:
-        search_alg = OptunaSearch(metric="mse", mode="min")
+        search_alg = OptunaSearch(metric="best_mse", mode="min")  # Changed metric
         print("✅ Using Optuna search algorithm")
     except Exception as e:
         print(f"⚠️ Optuna not available, using default search: {e}")
         search_alg = None
 
-    # Use the newer Tuner API
     print(f"Starting Ray Tune optimization with {args.tune_samples} trials...")
     print(f"Search space: {search_space}")
+    print(f"Current directory: {current_dir}")
 
-    # Create the tuner with updated API
-    tuner = tune.Tuner(
-        tune.with_parameters(train_apn_tsmixer_with_tune, base_args=args),
-        tune_config=tune.TuneConfig(
+    # Use the older, more stable tune.run API to avoid storage issues
+    try:
+        analysis = tune.run(
+            tune.with_parameters(train_apn_tsmixer_with_tune, base_args=args),
+            config=search_space,
             scheduler=scheduler,
             search_alg=search_alg,
             num_samples=args.tune_samples,
-        ),
-        param_space=search_space,
-        run_config=ray.air.RunConfig(
             name=f"apn_tsmixer_tune_{args.dataset}",
-            storage_path=os.path.abspath("ray_results"),  # Use absolute path
             stop={"training_iteration": args.tune_epochs},
-            checkpoint_config=ray.air.CheckpointConfig(
-                checkpoint_frequency=0,  # Disable checkpointing to save space
-                checkpoint_at_end=False,
-            ),
-        ),
-    )
+            verbose=1,
+            resume="AUTO",
+            resources_per_trial={
+                "cpu": 1,
+                "gpu": 0.5 if torch.cuda.is_available() else 0,
+            },
+            # Remove storage_path to avoid API issues
+        )
 
-    # Run the optimization
-    results = tuner.fit()
+        # Get best result
+        best_trial = analysis.get_best_trial("best_mse", "min")
 
-    # Get best result
-    best_result = results.get_best_result("mse", "min")
+        if best_trial is None:
+            print("❌ No successful trials found! All trials failed.")
+            print("This usually indicates import or setup issues.")
 
-    print("\n" + "=" * 60)
-    print("RAY TUNE OPTIMIZATION RESULTS")
-    print("=" * 60)
-    print(f"Best trial config: {best_result.config}")
-    print(f"Best trial final validation MSE: {best_result.metrics['mse']:.6f}")
-    print(f"Best trial final validation MAE: {best_result.metrics['mae']:.6f}")
-    print(f"Best trial final validation RMSE: {best_result.metrics['rmse']:.6f}")
-    print(f"Best trial final validation MAPE: {best_result.metrics['mape'] * 100:.2f}%")
-    print(f"Best trial reached epoch: {best_result.metrics['epoch']}")
-    print("=" * 60)
+            # Try to get error information
+            errored_trials = analysis.get_failed_trials()
+            if errored_trials:
+                print(f"Found {len(errored_trials)} failed trials")
+                for i, trial in enumerate(errored_trials[:3]):  # Show first 3 errors
+                    print(
+                        f"Trial {i + 1} error: {trial.error_filename if hasattr(trial, 'error_filename') else 'No error file'}"
+                    )
 
-    # Generate command line for best config
-    best_config = best_result.config
-    cmd_parts = [
-        "python run_models.py",
-        f"--dataset {args.dataset}",
-        f"--model APNTSMixer",
-        f"--epoch 200",  # Full training
-    ]
+            ray.shutdown()
+            return None
 
-    for key, value in best_config.items():
-        if key == "use_attention":
-            if value:
-                cmd_parts.append(f"--{key}")  # For boolean flags, just add the flag
-        else:
-            cmd_parts.append(f"--{key} {value}")
+        print("\n" + "=" * 60)
+        print("RAY TUNE OPTIMIZATION RESULTS")
+        print("=" * 60)
+        print(f"Best trial config: {best_trial.config}")
+        print(
+            f"Best trial final validation MSE: {best_trial.last_result['best_mse']:.6f}"
+        )
+        print(f"Best trial final validation MAE: {best_trial.last_result['mae']:.6f}")
+        print(f"Best trial final validation RMSE: {best_trial.last_result['rmse']:.6f}")
+        print(
+            f"Best trial final validation MAPE: {best_trial.last_result['mape'] * 100:.2f}%"
+        )
+        print(f"Best trial reached epoch: {best_trial.last_result['epoch']}")
+        print("=" * 60)
 
-    best_command = " ".join(cmd_parts)
-    print(f"\n🚀 Command to run best configuration:")
-    print(best_command)
+        # Generate command line for best config
+        best_config = best_trial.config
+        cmd_parts = [
+            "python run_models.py",
+            f"--dataset {args.dataset}",
+            f"--model APNTSMixer",
+            f"--epoch 200",  # Full training
+        ]
 
-    # Save best config to file
-    best_config_path = f"best_config_{args.dataset}_{args.model}.txt"
-    with open(best_config_path, "w") as f:
-        f.write("Best hyperparameter configuration:\n")
-        f.write("=" * 40 + "\n")
         for key, value in best_config.items():
-            f.write(f"{key}: {value}\n")
-        f.write(f"\nFinal validation MSE: {best_result.metrics['mse']:.6f}\n")
-        f.write(f"Final validation MAE: {best_result.metrics['mae']:.6f}\n")
-        f.write(f"Final validation RMSE: {best_result.metrics['rmse']:.6f}\n")
-        f.write(f"Final validation MAPE: {best_result.metrics['mape'] * 100:.2f}%\n")
-        f.write(f"\nBest command to run:\n")
-        f.write(f"{best_command}\n")
+            if key == "use_attention":
+                if value:
+                    cmd_parts.append(f"--{key}")
+            else:
+                cmd_parts.append(f"--{key} {value}")
 
-    print(f"Best configuration saved to: {best_config_path}")
+        best_command = " ".join(cmd_parts)
+        print(f"\n🚀 Command to run best configuration:")
+        print(best_command)
 
-    # Shutdown Ray
-    ray.shutdown()
+        # Save best config to file
+        best_config_path = f"best_config_{args.dataset}_{args.model}.txt"
+        with open(best_config_path, "w") as f:
+            f.write("Best hyperparameter configuration:\n")
+            f.write("=" * 40 + "\n")
+            for key, value in best_config.items():
+                f.write(f"{key}: {value}\n")
+            f.write(
+                f"\nFinal validation MSE: {best_trial.last_result['best_mse']:.6f}\n"
+            )
+            f.write(f"Final validation MAE: {best_trial.last_result['mae']:.6f}\n")
+            f.write(f"Final validation RMSE: {best_trial.last_result['rmse']:.6f}\n")
+            f.write(
+                f"Final validation MAPE: {best_trial.last_result['mape'] * 100:.2f}%\n"
+            )
+            f.write(f"\nBest command to run:\n")
+            f.write(f"{best_command}\n")
 
-    return best_result
+        print(f"Best configuration saved to: {best_config_path}")
+
+        # Shutdown Ray
+        ray.shutdown()
+        return best_trial
+
+    except Exception as e:
+        print(f"❌ Ray Tune optimization failed: {e}")
+        print("This could be due to environment or import issues.")
+        ray.shutdown()
+        return None
 
 
 #####################################################################################################
