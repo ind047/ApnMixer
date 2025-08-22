@@ -263,17 +263,18 @@ def train_apn_tsmixer_with_tune(config, base_args):
             best_val_mse = val_res["mse"]
             best_epoch = epoch
 
-        # Report to Ray Tune
-        tune.report(
-            mse=val_res["mse"],
-            mae=val_res["mae"],
-            rmse=val_res["rmse"],
-            mape=val_res["mape"],
-            loss=val_res["loss"],
-            epoch=epoch,
-            best_mse=best_val_mse,
-            best_epoch=best_epoch,
-        )
+        # Report to Ray Tune - FIXED: Use dictionary format
+        metrics = {
+            "mse": val_res["mse"],
+            "mae": val_res["mae"],
+            "rmse": val_res["rmse"],
+            "mape": val_res["mape"],
+            "loss": val_res["loss"],
+            "epoch": epoch,
+            "best_mse": best_val_mse,
+            "best_epoch": best_epoch,
+        }
+        tune.report(metrics)
 
         # Early stopping for this trial
         if epoch - best_epoch >= args.patience:
