@@ -27,6 +27,9 @@ class AdaptiveMixerBlock(nn.Module):
             nn.Linear(num_patches, num_patches * expansion_factor),
             nn.GELU(),
             nn.Dropout(0.1),
+            nn.Linear(num_patches * expansion_factor, num_patches * expansion_factor),
+            nn.GELU(),
+            nn.Dropout(0.1),
             nn.Linear(num_patches * expansion_factor, num_patches),
             nn.Dropout(0.1),
         )
@@ -35,6 +38,9 @@ class AdaptiveMixerBlock(nn.Module):
         self.channel_norm = nn.LayerNorm(d_model)
         self.channel_mlp = nn.Sequential(
             nn.Linear(num_series, num_series * expansion_factor),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(num_series * expansion_factor, num_series * expansion_factor),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(num_series * expansion_factor, num_series),
@@ -280,9 +286,11 @@ class APNTSMixer(nn.Module):
         self.decoder = nn.Sequential(
             nn.Linear(self.d_model + self.d_te, self.d_model),
             nn.ReLU(inplace=True),
+            nn.LayerNorm(self.d_model),
             nn.Dropout(0.1),
             nn.Linear(self.d_model, self.d_model // 2),
             nn.ReLU(inplace=True),
+            nn.LayerNorm(self.d_model // 2),
             nn.Linear(self.d_model // 2, 1),
         )
 
