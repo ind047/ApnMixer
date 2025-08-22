@@ -26,12 +26,12 @@ class AdaptiveMixerBlock(nn.Module):
         self.patch_mlp = nn.Sequential(
             nn.Linear(num_patches, num_patches * expansion_factor),
             nn.GELU(),
-            nn.Dropout(0.1),
+            nn.Dropout(dropout),
             nn.Linear(num_patches * expansion_factor, num_patches * expansion_factor),
             nn.GELU(),
-            nn.Dropout(0.1),
+            nn.Dropout(dropout),
             nn.Linear(num_patches * expansion_factor, num_patches),
-            nn.Dropout(0.1),
+            nn.Dropout(dropout),
         )
 
         # Channel mixing: mix across different time series (vital signs)
@@ -267,7 +267,7 @@ class APNTSMixer(nn.Module):
                         num_patches=self.n_patches,
                         num_series=self.n_series,
                         expansion_factor=2,
-                        dropout=0.1,
+                        dropout=getattr(args, "dropout", 0.1),
                     )
                     for _ in range(args.nlayer)
                 ]
@@ -287,7 +287,11 @@ class APNTSMixer(nn.Module):
             nn.Linear(self.d_model + self.d_te, self.d_model),
             nn.ReLU(inplace=True),
             nn.LayerNorm(self.d_model),
-            nn.Dropout(0.1),
+            nn.Dropout(getattr(args, "dropout", 0.1)),
+            nn.Linear(self.d_model, self.d_model),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(self.d_model),
+            nn.Dropout(getattr(args, "dropout", 0.1)),
             nn.Linear(self.d_model, self.d_model // 2),
             nn.ReLU(inplace=True),
             nn.LayerNorm(self.d_model // 2),
