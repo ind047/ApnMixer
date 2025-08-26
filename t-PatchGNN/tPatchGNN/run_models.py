@@ -85,7 +85,7 @@ parser.add_argument(
 parser.add_argument(
     "--use_attention",
     type=bool,
-    default=True,
+    default=False,
     help="Whether to use attention mechanism in the model.",
 )
 # value 0 means using original time granularity, Value 1 means quantization by 1 hour,
