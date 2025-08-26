@@ -276,7 +276,7 @@ class APNTSMixer(nn.Module):
         self.norm = nn.LayerNorm(self.d_model)
 
         # Optional end-layer attention for aggregation
-        self.use_end_attention = getattr(args, "use_end_attention", False)
+        self.use_end_attention = getattr(args, "use_end_attention", True)
         if self.use_end_attention:
             self.attention_aggregation = LightweightAttentionAggregation(
                 self.d_model, self.n_patches
