@@ -11,7 +11,7 @@ from .APN import (
 
 
 class AdaptiveMixerBlock(nn.Module):
-    """True PatchTSMixer-style mixer block"""
+    """Enhanced PatchTSMixer-style mixer block with improved residual connections"""
 
     def __init__(
         self, d_model, num_patches, num_series, expansion_factor=2, dropout=0.1
@@ -21,45 +21,71 @@ class AdaptiveMixerBlock(nn.Module):
         self.num_patches = num_patches
         self.num_series = num_series
 
-        # Patch mixing: mix across time patches
-        self.patch_norm = nn.LayerNorm(d_model)
+        # Patch mixing: mix across time patches with improved architecture
+        self.patch_norm1 = nn.LayerNorm(d_model)
         self.patch_mlp = nn.Sequential(
             nn.Linear(num_patches, num_patches * expansion_factor),
+            nn.LayerNorm(num_patches * expansion_factor),  # Added LayerNorm
             nn.GELU(),
-            nn.Dropout(0.1),
+            nn.Dropout(dropout),  # Use consistent dropout
+            nn.Linear(
+                num_patches * expansion_factor, num_patches * expansion_factor
+            ),  # Extra layer
+            nn.LayerNorm(num_patches * expansion_factor),  # Added LayerNorm
+            nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(num_patches * expansion_factor, num_patches),
-            nn.Dropout(0.1),
+            nn.Dropout(dropout),
         )
+        self.patch_norm2 = nn.LayerNorm(d_model)  # Post-residual norm
 
         # Channel mixing: mix across different time series (vital signs)
-        self.channel_norm = nn.LayerNorm(d_model)
+        self.channel_norm1 = nn.LayerNorm(d_model)
         self.channel_mlp = nn.Sequential(
             nn.Linear(num_series, num_series * expansion_factor),
+            nn.LayerNorm(num_series * expansion_factor),  # Added LayerNorm
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(
+                num_series * expansion_factor, num_series * expansion_factor
+            ),  # Extra layer
+            nn.LayerNorm(num_series * expansion_factor),  # Added LayerNorm
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(num_series * expansion_factor, num_series),
             nn.Dropout(dropout),
         )
+        self.channel_norm2 = nn.LayerNorm(d_model)  # Post-residual norm
+
+        # Learnable residual weights for adaptive mixing
+        self.patch_residual_weight = nn.Parameter(torch.ones(1))
+        self.channel_residual_weight = nn.Parameter(torch.ones(1))
 
     def forward(self, x):
         # x shape: (B, D, P, d_model)
         B, D, P, d_model = x.shape
 
-        # 1. Patch mixing: mix information across time patches
+        # 1. Enhanced Patch mixing with pre-post normalization and learnable residual
         residual = x
-        x = self.patch_norm(x)  # (B, D, P, d_model)
+        x = self.patch_norm1(x)  # Pre-normalization (B, D, P, d_model)
         x = x.permute(0, 1, 3, 2)  # (B, D, d_model, P)
         x = self.patch_mlp(x)  # Mix across P dimension
         x = x.permute(0, 1, 3, 2)  # (B, D, P, d_model)
-        x = x + residual  # Residual connection
 
-        # 2. Channel mixing: mix information across different time series
+        # Learnable residual connection with scaling
+        x = self.patch_residual_weight * residual + x
+        x = self.patch_norm2(x)  # Post-normalization
+
+        # 2. Enhanced Channel mixing with pre-post normalization and learnable residual
         residual = x
-        x = self.channel_norm(x)  # (B, D, P, d_model)
+        x = self.channel_norm1(x)  # Pre-normalization (B, D, P, d_model)
         x = x.permute(0, 2, 3, 1)  # (B, P, d_model, D) - move series to last dim
         x = self.channel_mlp(x)  # Mix across D (series) dimension
         x = x.permute(0, 3, 1, 2)  # (B, D, P, d_model) - back to original
-        x = x + residual  # Residual connection
+
+        # Learnable residual connection with scaling
+        x = self.channel_residual_weight * residual + x
+        x = self.channel_norm2(x)  # Post-normalization
 
         return x
 
@@ -115,6 +141,10 @@ class AttentionMixerBlock(nn.Module):
         self.patch_mix_weight = nn.Parameter(torch.tensor(0.5))
         self.channel_mix_weight = nn.Parameter(torch.tensor(0.5))
 
+        # Learnable residual weights for adaptive mixing
+        self.patch_residual_weight = nn.Parameter(torch.ones(1))
+        self.channel_residual_weight = nn.Parameter(torch.ones(1))
+
     def forward(self, x):
         # x shape: (B, D, P, d_model)
         B, D, P, d_model = x.shape
@@ -145,7 +175,8 @@ class AttentionMixerBlock(nn.Module):
             patch_alpha * x_patch_attended + (1 - patch_alpha) * x_patch_mlp
         )
 
-        x = residual + x_patch_combined
+        # Enhanced residual with learnable weight
+        x = self.patch_residual_weight * residual + x_patch_combined
 
         # === 2. Channel Mixing with Attention ===
         residual = x
@@ -186,7 +217,8 @@ class AttentionMixerBlock(nn.Module):
             channel_alpha * x_channel_attended + (1 - channel_alpha) * x_channel_mlp
         )
 
-        x = residual + x_channel_combined
+        # Enhanced residual with learnable weight
+        x = self.channel_residual_weight * residual + x_channel_combined
 
         return x, patch_attention_weights
 
