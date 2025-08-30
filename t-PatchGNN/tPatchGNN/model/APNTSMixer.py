@@ -269,7 +269,7 @@ class APNTSMixer(nn.Module):
         self.projection = nn.Linear(1 + self.d_te, self.d_model)
 
         # --- Attention Mixer Layers ---
-        self.use_attention = getattr(args, "use_attention", True)
+        self.use_attention = getattr(args, "use_attention", False)
 
         if self.use_attention:
             self.mixer_layers = nn.ModuleList(
