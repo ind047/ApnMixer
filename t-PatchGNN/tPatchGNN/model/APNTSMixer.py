@@ -27,15 +27,15 @@ class AdaptiveMixerBlock(nn.Module):
             nn.Linear(num_patches, num_patches * expansion_factor),
             nn.LayerNorm(num_patches * expansion_factor),  # Added LayerNorm
             nn.GELU(),
-            nn.Dropout(dropout),  # Use consistent dropout
+            # nn.Dropout(dropout),  # Use consistent dropout
             nn.Linear(
                 num_patches * expansion_factor, num_patches * expansion_factor
             ),  # Extra layer
             nn.LayerNorm(num_patches * expansion_factor),  # Added LayerNorm
             nn.GELU(),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
             nn.Linear(num_patches * expansion_factor, num_patches),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
         )
         self.patch_norm2 = nn.LayerNorm(d_model)  # Post-residual norm
 
@@ -45,15 +45,15 @@ class AdaptiveMixerBlock(nn.Module):
             nn.Linear(num_series, num_series * expansion_factor),
             nn.LayerNorm(num_series * expansion_factor),  # Added LayerNorm
             nn.GELU(),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
             nn.Linear(
                 num_series * expansion_factor, num_series * expansion_factor
             ),  # Extra layer
             nn.LayerNorm(num_series * expansion_factor),  # Added LayerNorm
             nn.GELU(),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
             nn.Linear(num_series * expansion_factor, num_series),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
         )
         self.channel_norm2 = nn.LayerNorm(d_model)  # Post-residual norm
 
@@ -114,9 +114,9 @@ class AttentionMixerBlock(nn.Module):
             nn.Linear(num_patches, num_patches * expansion_factor),
             nn.LayerNorm(num_patches * expansion_factor),
             nn.GELU(),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
             nn.Linear(num_patches * expansion_factor, num_patches),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
         )
 
         # --- Channel Mixing with Attention ---
@@ -132,9 +132,9 @@ class AttentionMixerBlock(nn.Module):
             nn.Linear(num_series, num_series * expansion_factor),
             nn.LayerNorm(num_series * expansion_factor),
             nn.GELU(),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
             nn.Linear(num_series * expansion_factor, num_series),
-            nn.Dropout(dropout),
+            # nn.Dropout(dropout),
         )
 
         # Learnable mixing weights for attention + MLP combination
@@ -312,7 +312,7 @@ class APNTSMixer(nn.Module):
         self.decoder = nn.Sequential(
             nn.Linear(self.d_model + self.d_te, self.d_model),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.1),
+            # nn.Dropout(0.1),
             nn.Linear(self.d_model, self.d_model // 2),
             nn.ReLU(inplace=True),
             nn.Linear(self.d_model // 2, 1),
