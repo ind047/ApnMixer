@@ -7,12 +7,12 @@ from ray import tune
 from ray.tune.schedulers import ASHAScheduler
 import numpy as np
 
-sys.path.append("..")
+# sys.path.append("..")
 
-import lib.utils as utils
-from lib.parse_datasets import parse_datasets
-from lib.evaluation import compute_all_losses, evaluation
-from model.APNTSMixer import APNTSMixer
+# import lib.utils as utils
+# from lib.parse_datasets import parse_datasets
+# from lib.evaluation import compute_all_losses, evaluation
+# from model.APNTSMixer import APNTSMixer
 
 
 def train_model(config):
