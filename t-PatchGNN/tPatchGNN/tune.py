@@ -25,6 +25,8 @@ def train_model(config):
     # Re-setup path in worker (critical for Ray)
     import os
     import sys
+    import torch
+    import torch.optim as optim
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(current_dir)
@@ -83,8 +85,8 @@ def train_model(config):
                 model, data_obj["val_dataloader"], data_obj["n_val_batches"]
             )
 
-        # Report metrics to Ray Tune
-        tune.report(val_mse=val_res["mse"])
+        # Report metrics to Ray Tune - FIX: Pass as dictionary
+        tune.report({"val_mse": val_res["mse"], "epoch": epoch})
 
 
 if __name__ == "__main__":
