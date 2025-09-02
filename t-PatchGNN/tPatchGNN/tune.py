@@ -23,10 +23,19 @@ from model.APNTSMixer import APNTSMixer
 def train_model(config):
     """Trainable function for Ray Tune"""
     # Re-setup path in worker (critical for Ray)
+    import os
+    import sys
+    
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(current_dir)
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
+
+    # Import modules in worker process
+    import lib.utils as utils
+    from lib.parse_datasets import parse_datasets
+    from lib.evaluation import compute_all_losses, evaluation
+    from model.APNTSMixer import APNTSMixer
 
     # --- Setup ---
     args = config["args"]
@@ -120,7 +129,7 @@ if __name__ == "__main__":
     search_space = {
         "lr": tune.loguniform(1e-4, 1e-2),
         "w_decay": tune.loguniform(1e-5, 1e-3),
-        "nlayer": tune.choice([1, 2, 4, 6]),
+        "nlayer": tune.choice([1, 2, 4]),
         "hid_dim": tune.choice([32, 64, 128]),
         "expansion_factor": tune.choice([1, 2, 4]),
         "dropout": tune.uniform(0.1, 0.5),
