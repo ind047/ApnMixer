@@ -95,7 +95,7 @@ if __name__ == "__main__":
     # Core arguments
     parser.add_argument("--state", type=str, default="def")
     parser.add_argument("-n", type=int, default=int(1e8))
-    parser.add_argument("--epoch", type=int, default=200)
+    parser.add_argument("--epoch", type=int, default=30)
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--history", type=int, default=24)
     parser.add_argument("--patch_size", type=float, default=24)
