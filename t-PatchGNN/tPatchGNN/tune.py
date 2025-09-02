@@ -7,16 +7,27 @@ from ray import tune
 from ray.tune.schedulers import ASHAScheduler
 import numpy as np
 
-# sys.path.append("..")
+# Fix the path setup for Ray workers
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
-# import lib.utils as utils
-# from lib.parse_datasets import parse_datasets
-# from lib.evaluation import compute_all_losses, evaluation
-# from model.APNTSMixer import APNTSMixer
+# Now import after path is set
+import lib.utils as utils
+from lib.parse_datasets import parse_datasets
+from lib.evaluation import compute_all_losses, evaluation
+from model.APNTSMixer import APNTSMixer
 
 
 def train_model(config):
     """Trainable function for Ray Tune"""
+    # Re-setup path in worker (critical for Ray)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+
     # --- Setup ---
     args = config["args"]
     args.lr = config["lr"]
