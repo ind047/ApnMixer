@@ -265,7 +265,7 @@ if __name__ == "__main__":
 
     analysis = tune.run(
         train_model,
-        resources_per_trial={"cpu": 1, "gpu": 1 if torch.cuda.is_available() else 0},
+        resources_per_trial={"cpu": 1, "gpu": 0.5 if torch.cuda.is_available() else 0},
         config=search_space,
         num_samples=50,
         scheduler=scheduler,
