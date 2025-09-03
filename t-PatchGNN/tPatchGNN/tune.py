@@ -46,12 +46,13 @@ def train_model(config):
     # --- Logging setup ---
     os.makedirs("logs", exist_ok=True)
 
-    # Get trial ID from Ray Tune context
-    trial_id = (
-        tune.get_trial_name()
-    )  # This returns the trial name like "train_model_xxxxx_00001"
+    # Get trial ID from environment or generate one
+    # Ray Tune sets this environment variable in worker processes
+    trial_id = os.environ.get("TUNE_TRIAL_ID", None)
     if trial_id is None:
-        trial_id = f"trial_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Fallback: generate a unique trial ID
+        trial_id = f"trial_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    trial_id = f"train_model_{trial_id}"  # Prefix for clarity in logs
 
     trial_log_path = os.path.join("logs", f"{trial_id}.log")
     best_log_path = os.path.join("logs", "best_so_far.log")
