@@ -6,6 +6,8 @@ import torch.optim as optim
 from ray import tune
 from ray.tune.schedulers import ASHAScheduler
 import numpy as np
+import threading
+import json
 
 # Fix the path setup for Ray workers
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -27,17 +29,24 @@ def train_model(config):
     import sys
     import torch
     import torch.optim as optim
+    import json
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(current_dir)
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
 
-    # Import modules in worker process
     import lib.utils as utils
     from lib.parse_datasets import parse_datasets
     from lib.evaluation import compute_all_losses, evaluation
     from model.APNTSMixer import APNTSMixer
+
+    # --- Logging setup ---
+    os.makedirs("logs", exist_ok=True)
+    trial_id = tune.get_trial_id()
+    trial_log_path = os.path.join("logs", f"trial_{trial_id}.log")
+    best_log_path = os.path.join("logs", "best_so_far.log")
+    best_lock = threading.Lock()  # For thread-safe writing
 
     # --- Setup ---
     args = config["args"]
@@ -46,7 +55,8 @@ def train_model(config):
     args.nlayer = config["nlayer"]
     args.hid_dim = config["hid_dim"]
     args.expansion_factor = config["expansion_factor"]
-    args.dropout = config["dropout"]
+    args.batch_size = config["batch_size"]
+    # args.dropout = config["dropout"]
     args.use_attention = config["use_attention"]
 
     # Ensure model is set correctly
@@ -67,6 +77,9 @@ def train_model(config):
 
     num_batches = data_obj["n_train_batches"]
 
+    best_mse = float("inf")
+    best_config = None
+
     # --- Training Loop ---
     for epoch in range(args.epoch):
         model.train()
@@ -84,9 +97,37 @@ def train_model(config):
             val_res = evaluation(
                 model, data_obj["val_dataloader"], data_obj["n_val_batches"]
             )
+        val_mse = val_res["mse"]
+
+        # Write to trial log
+        with open(trial_log_path, "a") as f:
+            f.write(f"Epoch {epoch} - val_mse: {val_mse}\n")
+
+        # Check and update best-so-far
+        if val_mse < best_mse:
+            best_mse = val_mse
+            best_config = {
+                "trial_id": trial_id,
+                "epoch": epoch,
+                "val_mse": val_mse,
+                "config": {
+                    "lr": args.lr,
+                    "w_decay": args.w_decay,
+                    "batch_size": args.batch_size,
+                    "nlayer": args.nlayer,
+                    "hid_dim": args.hid_dim,
+                    "expansion_factor": args.expansion_factor,
+                    # "dropout": args.dropout,
+                    "use_attention": args.use_attention,
+                },
+            }
+            # Write best-so-far to shared log (thread-safe)
+            with best_lock:
+                with open(best_log_path, "a") as bf:
+                    bf.write(json.dumps(best_config) + "\n")
 
         # Report metrics to Ray Tune - FIX: Pass as dictionary
-        tune.report({"val_mse": val_res["mse"], "epoch": epoch})
+        tune.report({"val_mse": val_mse, "epoch": epoch})
 
 
 if __name__ == "__main__":
@@ -100,7 +141,7 @@ if __name__ == "__main__":
     parser.add_argument("--history", type=int, default=24)
     parser.add_argument("--patch_size", type=float, default=24)
     parser.add_argument("--stride", type=float, default=24)
-    parser.add_argument("--batch_size", type=int, default=256)
+    # parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--save", type=str, default="experiments/")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--dataset", type=str, default="physionet")
@@ -133,8 +174,9 @@ if __name__ == "__main__":
         "w_decay": tune.loguniform(1e-5, 1e-3),
         "nlayer": tune.choice([1, 2, 4]),
         "hid_dim": tune.choice([32, 64, 128]),
+        "batch_size": tune.choice([64, 128, 256]),
         "expansion_factor": tune.choice([1, 2, 4]),
-        "dropout": tune.uniform(0.1, 0.5),
+        # "dropout": tune.uniform(0.1, 0.5),
         "use_attention": tune.choice([True, False]),
         "args": args,
     }
