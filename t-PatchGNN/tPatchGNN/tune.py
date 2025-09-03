@@ -8,6 +8,7 @@ from ray.tune.schedulers import ASHAScheduler
 import numpy as np
 import threading
 import json
+from datetime import datetime
 
 # Fix the path setup for Ray workers
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +31,7 @@ def train_model(config):
     import torch
     import torch.optim as optim
     import json
+    from datetime import datetime
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(current_dir)
@@ -43,10 +45,24 @@ def train_model(config):
 
     # --- Logging setup ---
     os.makedirs("logs", exist_ok=True)
-    trial_id = tune.get_trial_id()
-    trial_log_path = os.path.join("logs", f"trial_{trial_id}.log")
+
+    # Get trial ID from Ray Tune context
+    trial_id = (
+        tune.get_trial_name()
+    )  # This returns the trial name like "train_model_xxxxx_00001"
+    if trial_id is None:
+        trial_id = f"trial_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    trial_log_path = os.path.join("logs", f"{trial_id}.log")
     best_log_path = os.path.join("logs", "best_so_far.log")
-    best_lock = threading.Lock()  # For thread-safe writing
+
+    # Global best tracker (shared across all trials)
+    global_best_path = os.path.join("logs", "global_best.json")
+
+    # Initialize global best if it doesn't exist
+    if not os.path.exists(global_best_path):
+        with open(global_best_path, "w") as f:
+            json.dump({"best_mse": float("inf"), "best_config": None}, f)
 
     # --- Setup ---
     args = config["args"]
@@ -56,7 +72,6 @@ def train_model(config):
     args.hid_dim = config["hid_dim"]
     args.expansion_factor = config["expansion_factor"]
     args.batch_size = config["batch_size"]
-    # args.dropout = config["dropout"]
     args.use_attention = config["use_attention"]
 
     # Ensure model is set correctly
@@ -77,19 +92,32 @@ def train_model(config):
 
     num_batches = data_obj["n_train_batches"]
 
-    best_mse = float("inf")
-    best_config = None
+    # Write trial start info
+    with open(trial_log_path, "w") as f:
+        f.write(f"=== Trial {trial_id} Started ===\n")
+        f.write(f"Start time: {datetime.now()}\n")
+        f.write(
+            f"Config: {json.dumps({k: v for k, v in config.items() if k != 'args'}, indent=2)}\n"
+        )
+        f.write("=" * 50 + "\n")
 
     # --- Training Loop ---
     for epoch in range(args.epoch):
+        epoch_start = datetime.now()
+
         model.train()
-        for _ in range(num_batches):
+        train_loss = 0.0
+
+        for batch_idx in range(num_batches):
             optimizer.zero_grad()
             batch_dict = utils.get_next_batch(data_obj["train_dataloader"])
             train_res = compute_all_losses(model, batch_dict)
             train_res["loss"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+            train_loss += train_res["loss"].item()
+
+        avg_train_loss = train_loss / num_batches
 
         # --- Validation ---
         model.eval()
@@ -99,35 +127,69 @@ def train_model(config):
             )
         val_mse = val_res["mse"]
 
+        epoch_time = (datetime.now() - epoch_start).total_seconds()
+
         # Write to trial log
         with open(trial_log_path, "a") as f:
-            f.write(f"Epoch {epoch} - val_mse: {val_mse}\n")
+            f.write(
+                f"Epoch {epoch:3d} | train_loss: {avg_train_loss:.6f} | val_mse: {val_mse:.6f} | time: {epoch_time:.2f}s | {datetime.now()}\n"
+            )
 
-        # Check and update best-so-far
-        if val_mse < best_mse:
-            best_mse = val_mse
-            best_config = {
-                "trial_id": trial_id,
-                "epoch": epoch,
-                "val_mse": val_mse,
-                "config": {
-                    "lr": args.lr,
-                    "w_decay": args.w_decay,
-                    "batch_size": args.batch_size,
-                    "nlayer": args.nlayer,
-                    "hid_dim": args.hid_dim,
-                    "expansion_factor": args.expansion_factor,
-                    # "dropout": args.dropout,
-                    "use_attention": args.use_attention,
-                },
-            }
-            # Write best-so-far to shared log (thread-safe)
-            with best_lock:
-                with open(best_log_path, "a") as bf:
-                    bf.write(json.dumps(best_config) + "\n")
+        # Check and update global best (thread-safe)
+        try:
+            # Read current global best
+            with open(global_best_path, "r") as f:
+                global_best = json.load(f)
 
-        # Report metrics to Ray Tune - FIX: Pass as dictionary
-        tune.report({"val_mse": val_mse, "epoch": epoch})
+            current_global_best_mse = global_best.get("best_mse", float("inf"))
+
+            # If this is a new global best
+            if val_mse < current_global_best_mse:
+                new_best = {
+                    "best_mse": val_mse,
+                    "best_config": {
+                        "trial_id": trial_id,
+                        "epoch": epoch,
+                        "timestamp": datetime.now().isoformat(),
+                        "config": {
+                            "lr": args.lr,
+                            "w_decay": args.w_decay,
+                            "batch_size": args.batch_size,
+                            "nlayer": args.nlayer,
+                            "hid_dim": args.hid_dim,
+                            "expansion_factor": args.expansion_factor,
+                            "use_attention": args.use_attention,
+                        },
+                    },
+                }
+
+                # Write new global best
+                with open(global_best_path, "w") as f:
+                    json.dump(new_best, f, indent=2)
+
+                # Also append to best log for history
+                with open(best_log_path, "a") as f:
+                    f.write(
+                        f"{datetime.now().isoformat()} | NEW BEST: {val_mse:.6f} | Trial: {trial_id} | Epoch: {epoch} | Config: {json.dumps(new_best['best_config']['config'])}\n"
+                    )
+
+                # Log in trial file too
+                with open(trial_log_path, "a") as f:
+                    f.write(f"*** NEW GLOBAL BEST! MSE: {val_mse:.6f} ***\n")
+
+        except Exception as e:
+            # If there's an issue with file operations, continue training
+            with open(trial_log_path, "a") as f:
+                f.write(f"Error updating global best: {e}\n")
+
+        # Report metrics to Ray Tune
+        tune.report({"val_mse": val_mse, "epoch": epoch, "train_loss": avg_train_loss})
+
+    # Write trial completion info
+    with open(trial_log_path, "a") as f:
+        f.write("=" * 50 + "\n")
+        f.write(f"Trial completed at: {datetime.now()}\n")
+        f.write(f"Final validation MSE: {val_mse:.6f}\n")
 
 
 if __name__ == "__main__":
@@ -141,7 +203,6 @@ if __name__ == "__main__":
     parser.add_argument("--history", type=int, default=24)
     parser.add_argument("--patch_size", type=float, default=24)
     parser.add_argument("--stride", type=float, default=24)
-    # parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--save", type=str, default="experiments/")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--dataset", type=str, default="physionet")
@@ -168,6 +229,18 @@ if __name__ == "__main__":
     if args.t_obs is None:
         args.t_obs = args.history
 
+    # Create logs directory
+    os.makedirs("logs", exist_ok=True)
+
+    # Initialize main log
+    main_log_path = os.path.join("logs", "tune_main.log")
+    with open(main_log_path, "w") as f:
+        f.write(f"=== Ray Tune Hyperparameter Search Started ===\n")
+        f.write(f"Start time: {datetime.now()}\n")
+        f.write(f"Total trials: 50\n")
+        f.write(f"Max epochs per trial: {args.epoch}\n")
+        f.write("=" * 60 + "\n")
+
     # --- Ray Tune Search Space ---
     search_space = {
         "lr": tune.loguniform(1e-4, 1e-2),
@@ -176,7 +249,6 @@ if __name__ == "__main__":
         "hid_dim": tune.choice([32, 64, 128]),
         "batch_size": tune.choice([64, 128, 256]),
         "expansion_factor": tune.choice([1, 2, 4]),
-        # "dropout": tune.uniform(0.1, 0.5),
         "use_attention": tune.choice([True, False]),
         "args": args,
     }
@@ -199,4 +271,24 @@ if __name__ == "__main__":
         name="apntsmixer_tuning",
     )
 
+    # Final results
     print("Best hyperparameters found were: ", analysis.best_config)
+    print(f"Best validation MSE: {analysis.best_result['val_mse']:.6f}")
+
+    # Write final summary
+    with open(main_log_path, "a") as f:
+        f.write("=" * 60 + "\n")
+        f.write(f"Tuning completed at: {datetime.now()}\n")
+        f.write(f"Best validation MSE: {analysis.best_result['val_mse']:.6f}\n")
+        f.write(f"Best config: {json.dumps(analysis.best_config, indent=2)}\n")
+
+    # Read and display final global best
+    try:
+        global_best_path = os.path.join("logs", "global_best.json")
+        if os.path.exists(global_best_path):
+            with open(global_best_path, "r") as f:
+                final_best = json.load(f)
+            print(f"\nFinal Global Best MSE: {final_best['best_mse']:.6f}")
+            print(f"From Trial: {final_best['best_config']['trial_id']}")
+    except Exception as e:
+        print(f"Could not read global best: {e}")
