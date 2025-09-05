@@ -14,7 +14,7 @@ class AdaptiveMixerBlock(nn.Module):
     """Enhanced PatchTSMixer-style mixer block with improved residual connections"""
 
     def __init__(
-        self, d_model, num_patches, num_series, expansion_factor=2, dropout=0.1
+        self, d_model, num_patches, num_series, expansion_factor=4, dropout=0.1
     ):
         super().__init__()
         self.d_model = d_model
@@ -94,7 +94,7 @@ class AttentionMixerBlock(nn.Module):
     """AdaptiveMixerBlock with attention integrated into patch and channel mixing"""
 
     def __init__(
-        self, d_model, num_patches, num_series, expansion_factor=2, dropout=0.1
+        self, d_model, num_patches, num_series, expansion_factor=4, dropout=0.1
     ):
         super().__init__()
         self.d_model = d_model
@@ -278,8 +278,8 @@ class APNTSMixer(nn.Module):
                         d_model=self.d_model,
                         num_patches=self.n_patches,
                         num_series=self.n_series,
-                        expansion_factor=getattr(args, "expansion_factor", 2),
-                        dropout=getattr(args, "dropout", 0.1),
+                        expansion_factor=getattr(args, "expansion_factor", 4),
+                        # dropout=getattr(args, "dropout", 0.1),
                     )
                     for _ in range(args.nlayer)
                 ]
@@ -292,8 +292,8 @@ class APNTSMixer(nn.Module):
                         d_model=self.d_model,
                         num_patches=self.n_patches,
                         num_series=self.n_series,
-                        expansion_factor=2,
-                        dropout=0.1,
+                        expansion_factor=4,
+                        # dropout=0.1,
                     )
                     for _ in range(args.nlayer)
                 ]
