@@ -75,15 +75,15 @@ class PatchAggregation(nn.Module):
             v_squeezed = v.squeeze(2)  # (B, N, L, 1)
             t_squeezed = t.squeeze(2)  # (B, N, L, 1)
             mask_squeezed = mask.squeeze(2)  # (B, N, L, 1)
-            
+
             # Encode observations
             h = self.observation_encoder(v_squeezed, t_squeezed)  # (B, N, L, d_model)
-            
+
             # Compute attention weights
             w = self.weight_net(t_squeezed)  # (B, N, L, d_model)
             w = w * mask_squeezed + (1 - mask_squeezed) * (-1e8)
             w = F.softmax(w, dim=2)  # attention across time
-            
+
             # Weighted sum across time dimension
             z = torch.sum(w * h, dim=2)  # (B, N, d_model)
             return z
@@ -109,8 +109,10 @@ class PatchAggregation(nn.Module):
 
         # Now aggregate across patches for each channel
         # Compute patch importance weights based on mask coverage
-        patch_coverage = mask.sum(dim=3, keepdim=True)  # (B, N, M, 1) - number of observations per patch
-        
+        patch_coverage = mask.sum(
+            dim=3, keepdim=True
+        )  # (B, N, M, 1) - number of observations per patch
+
         # Add small epsilon to avoid division by zero and ensure valid softmax
         patch_coverage = patch_coverage + 1e-8
         patch_weights = F.softmax(patch_coverage, dim=2)  # (B, N, M, 1)
@@ -243,11 +245,13 @@ class IMTS_Mixer(nn.Module):
         # Handle unobserved channels
         if is_patched:
             # For patched data: sum over patch and time dimensions
-            unobserved_mask = (observed_mask.sum(dim=(1, 2)) == 0).unsqueeze(-1)  # (B, N, 1)
+            unobserved_mask = (observed_mask.sum(dim=(1, 2)) == 0).unsqueeze(
+                -1
+            )  # (B, N, 1)
         else:
-            # For non-patched data: sum over time dimension  
+            # For non-patched data: sum over time dimension
             unobserved_mask = (observed_mask.sum(dim=1) == 0).unsqueeze(-1)  # (B, N, 1)
-            
+
         z = (
             z * (1 - unobserved_mask.float())
             + self.channel_bias * unobserved_mask.float()
