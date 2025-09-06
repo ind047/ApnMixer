@@ -22,6 +22,7 @@ from lib.evaluation import compute_all_losses, evaluation
 from model.tPatchGNN import tPatchGNN
 from model.APN import tAPN
 from model.APNTSMixer import APNTSMixer
+from model.IMTS_Mixer import IMTS_Mixer
 
 parser = argparse.ArgumentParser("IMTS Forecasting")
 
@@ -101,7 +102,7 @@ parser.add_argument(
     type=str,
     default="tPatchGNN",
     help="Model name",
-    choices=["tPatchGNN", "tAPN", "APNTSMixer"],
+    choices=["tPatchGNN", "tAPN", "APNTSMixer", "IMTS_Mixer"],
 )
 parser.add_argument("--outlayer", type=str, default="Linear", help="Model name")
 parser.add_argument(
@@ -198,6 +199,8 @@ if __name__ == "__main__":
         model = tAPN(args).to(args.device)
     elif args.model == "APNTSMixer":
         model = APNTSMixer(args).to(args.device)
+    elif args.model == "IMTS_Mixer":
+        model = IMTS_Mixer(args).to(args.device)
 
     ##################################################################
 
@@ -221,12 +224,14 @@ if __name__ == "__main__":
                 args.nlayer,
                 args.lr,
             )
-        elif args.model == "APNTSMixer":
+        elif args.model in ["APNTSMixer", "IMTS_Mixer"]:
+            # Handle both APNTSMixer and IMTS_Mixer with npatch parameter
+            npatch = getattr(args, "npatch", "def")  # Use 'def' if npatch not available
             log_path = "logs/{}_{}_{}_{}patch_{}layer_{}lr.log".format(
                 args.dataset,
                 args.model,
                 args.state,
-                args.npatch,
+                npatch,
                 args.nlayer,
                 args.lr,
             )
