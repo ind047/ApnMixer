@@ -256,7 +256,7 @@ if __name__ == "__main__":
     logger.info(args)
 
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.w_decay)
     scheduler = ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=args.patience
     )
