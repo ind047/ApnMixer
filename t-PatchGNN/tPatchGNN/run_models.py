@@ -106,16 +106,16 @@ parser.add_argument(
     choices=["tPatchGNN", "tAPN", "APNTSMixer", "IMTS_Mixer", "APN_IMTS_Mixer"],
 )
 parser.add_argument(
-    "--nonpatched", 
-    action="store_true", 
-    help="Use non-patched data format (3D) instead of patched format (4D) for IMTS_Mixer"
+    "--nonpatched",
+    action="store_true",
+    help="Use non-patched data format (3D) instead of patched format (4D) for IMTS_Mixer",
 )
 parser.add_argument("--outlayer", type=str, default="Linear", help="Model name")
 parser.add_argument(
     "-hd", "--hid_dim", type=int, default=64, help="Number of units per hidden layer"
 )
 parser.add_argument(
-    "-td", "--te_dim", type=int, default=10, help="Number of units for time encoding"
+    "-td", "--te_dim", type=int, default=20, help="Number of units for time encoding"
 )
 parser.add_argument(
     "-nd", "--node_dim", type=int, default=10, help="Number of units for node vectors"
