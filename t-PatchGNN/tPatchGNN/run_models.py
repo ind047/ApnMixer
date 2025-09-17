@@ -105,6 +105,11 @@ parser.add_argument(
     help="Model name",
     choices=["tPatchGNN", "tAPN", "APNTSMixer", "IMTS_Mixer", "APN_IMTS_Mixer"],
 )
+parser.add_argument(
+    "--nonpatched", 
+    action="store_true", 
+    help="Use non-patched data format (3D) instead of patched format (4D) for IMTS_Mixer"
+)
 parser.add_argument("--outlayer", type=str, default="Linear", help="Model name")
 parser.add_argument(
     "-hd", "--hid_dim", type=int, default=64, help="Number of units per hidden layer"
@@ -185,8 +190,14 @@ if __name__ == "__main__":
         # print(
         #     f"tAPN: Using extended temporal window (history={min(original_history * 3, 72)}) with t_obs={args.t_obs} for adaptive patching"
         # )
+    elif args.nonpatched:
+        # Use non-patched data format when --nonpatched flag is set
+        if args.t_obs is None:
+            args.t_obs = args.history
+        data_obj = parse_datasets(args, patch_ts=False)
+        print(f"Using non-patched data format (3D) for model: {args.model}")
     else:
-        # For tPatchGNN: use standard history-based windowing
+        # For tPatchGNN and other models: use standard history-based windowing with patching
         if args.t_obs is None:
             args.t_obs = args.history  # For tPatchGNN, t_obs equals history
         data_obj = parse_datasets(args, patch_ts=True)
