@@ -120,6 +120,15 @@ parser.add_argument(
 parser.add_argument(
     "-nd", "--node_dim", type=int, default=10, help="Number of units for node vectors"
 )
+parser.add_argument(
+    "--d_out", type=int, default=32, help="Output dimension for model predictions"
+)
+parser.add_argument(
+    "--n_heads",
+    type=int,
+    default=4,
+    help="Number of attention heads for channel mixing",
+)
 parser.add_argument("--gpu", type=str, default="0", help="which gpu to use.")
 parser.add_argument(
     "--t_obs",

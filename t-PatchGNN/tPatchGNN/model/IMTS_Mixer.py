@@ -36,21 +36,28 @@ class ChannelAggregation(nn.Module):
         self.weight_net = nn.Sequential(
             nn.Linear(1, d_time), nn.ReLU(inplace=True), nn.Linear(d_time, d_model)
         )
+        self.value_encoder = nn.Linear(1, d_model)
 
     def forward(self, v, t, mask):
         # v: (B, N, L, 1)
         # t: (B, N, L, 1)
         # mask: (B, N, L, 1)
 
-        h = self.observation_encoder(v, t)  # (B, N, L, d_model)
-
+        # h = self.observation_encoder(v, t)  # (B, N, L, d_model)
+        h = self.value_encoder(v) * self.weight_net(t)  # (B, N, L, d_model)
         # Compute weights
         w = self.weight_net(t)  # (B, N, L, d_model)
-        w = w * mask + (1 - mask) * (-1e8)
-        w = F.softmax(w, dim=2)
+        a = self.value_encoder(v) + w
+        a = a * mask + (1 - mask) * (-1e8)
+        a = F.softmax(a, dim=2)
+        z = torch.sum(a * h, dim=2)  # (B, N, d_model)
 
-        # Weighted sum
-        z = torch.sum(w * h, dim=2)  # (B, N, d_model)
+        # # --- IGNORE ---
+        # w = w * mask + (1 - mask) * (-1e8)
+        # w = F.softmax(w, dim=2)
+
+        # # Weighted sum
+        # z = torch.sum(w * h, dim=2)  # (B, N, d_model)
         return z
 
 
@@ -61,95 +68,142 @@ class PatchAggregation(nn.Module):
         self.weight_net = nn.Sequential(
             nn.Linear(1, d_time), nn.ReLU(inplace=True), nn.Linear(d_time, d_model)
         )
+        self.value_encoder = nn.Linear(1, d_model)
 
     def forward(self, v, t, mask):
-        # v: (B, N, M, L, 1)
-        # t: (B, N, M, L, 1)
-        # mask: (B, N, M, L, 1)
-
         B, N, M, L, _ = v.shape
+        # print(f"🔧 PatchAggregation: {M} patches detected")
 
-        # If there's only 1 patch, we can simplify the process
         if M == 1:
-            # Squeeze out the patch dimension and use regular channel aggregation
-            v_squeezed = v.squeeze(2)  # (B, N, L, 1)
-            t_squeezed = t.squeeze(2)  # (B, N, L, 1)
-            mask_squeezed = mask.squeeze(2)  # (B, N, L, 1)
+            # print(f"🚀 Using SIMPLIFIED path (single patch)")
+            # Simplified path for single patch
+            v_flat = v.squeeze(2)  # (B, N, L, 1)
+            t_flat = t.squeeze(2)  # (B, N, L, 1)
+            mask_flat = mask.squeeze(2)  # (B, N, L, 1)
 
-            # Encode observations
-            h = self.observation_encoder(v_squeezed, t_squeezed)  # (B, N, L, d_model)
+            # Process like ChannelAggregation
+            h = self.observation_encoder(v_flat, t_flat)  # (B, N, L, d_model)
+            w = self.weight_net(t_flat)  # (B, N, L, 1)
+            w = w * mask_flat + (1 - mask_flat) * (-1e8)
+            w = F.softmax(w, dim=2)  # (B, N, L, 1)
 
-            # Compute attention weights
-            w = self.weight_net(t_squeezed)  # (B, N, L, d_model)
-            w = w * mask_squeezed + (1 - mask_squeezed) * (-1e8)
-            w = F.softmax(w, dim=2)  # attention across time
-
-            # Weighted sum across time dimension
             z = torch.sum(w * h, dim=2)  # (B, N, d_model)
-            return z
 
-        # Reshape to process patches
-        v_flat = v.reshape(B * N * M, L, 1)  # (B*N*M, L, 1)
-        t_flat = t.reshape(B * N * M, L, 1)  # (B*N*M, L, 1)
-        mask_flat = mask.reshape(B * N * M, L, 1)  # (B*N*M, L, 1)
+        else:
+            # print(f"🏗️ Using FULL PATCH path ({M} patches)")
+            v_flat = v.reshape(B * N * M, L, 1)  # (B*N*M, L, 1)
+            t_flat = t.reshape(B * N * M, L, 1)  # (B*N*M, L, 1)
+            mask_flat = mask.reshape(B * N * M, L, 1)  # (B*N*M, L, 1)
+            # Encode observations within each patch
+            h = self.observation_encoder(v_flat, t_flat)  # (B*N*M, L, d_model)
+            # Compute attention weights
+            w = self.weight_net(t_flat)  # (B*N*M, L, d_model)
+            w = w * mask_flat + (1 - mask_flat) * (-1e8)
+            w = F.softmax(w, dim=1)  # attention across time within each patch
+            # Weighted sum across time dimension
+            patch_repr = torch.sum(w * h, dim=1)  # (B*N*M, d_model)
+            # Reshape back to separate patches
+            patch_repr = patch_repr.reshape(B, N, M, -1)  # (B, N, M, d_model)
+            # Now aggregate across patches for each channel
+            # Compute patch importance weights based on mask coverage
+            patch_coverage = torch.sum(mask, dim=3)  # (B, N, M, 1)
+            patch_coverage = patch_coverage + 1e-8  # avoid zero division
+            patch_weights = F.softmax(patch_coverage, dim=2)  # (B, N, M, 1)
+            # Final aggregation across patches
+            z = torch.sum(patch_weights * patch_repr, dim=2)  # (B, N, d_model)
 
-        # Encode observations within each patch
-        h = self.observation_encoder(v_flat, t_flat)  # (B*N*M, L, d_model)
+            # Step 1: Within-patch aggregation
+            # patch_representations = []
+            # patch_coverage = []
 
-        # Compute attention weights
-        w = self.weight_net(t_flat)  # (B*N*M, L, d_model)
-        w = w * mask_flat + (1 - mask_flat) * (-1e8)
-        w = F.softmax(w, dim=1)  # attention across time within each patch
+            # for m in range(M):
+            #     # Extract patch m from all batches and channels
+            #     v_patch = v[:, :, m, :, :]  # (B, N, L, 1)
+            #     t_patch = t[:, :, m, :, :]  # (B, N, L, 1)
+            #     mask_patch = mask[:, :, m, :, :]  # (B, N, L, 1)
 
-        # Weighted sum across time dimension
-        patch_repr = torch.sum(w * h, dim=1)  # (B*N*M, d_model)
+            #     # Process this patch
+            #     h_patch = self.observation_encoder(
+            #         v_patch, t_patch
+            #     )  # (B, N, L, d_model)
+            #     w_patch = self.weight_net(t_patch)  # (B, N, L, 1)
+            #     w_patch = w_patch * mask_patch + (1 - mask_patch) * (-1e8)
+            #     w_patch = F.softmax(w_patch, dim=2)  # (B, N, L, 1)
 
-        # Reshape back to separate patches
-        patch_repr = patch_repr.reshape(B, N, M, -1)  # (B, N, M, d_model)
+            #     # Aggregate within patch
+            #     patch_repr = torch.sum(w_patch * h_patch, dim=2)  # (B, N, d_model)
+            #     patch_representations.append(patch_repr)
 
-        # Now aggregate across patches for each channel
-        # Compute patch importance weights based on mask coverage
-        patch_coverage = mask.sum(
-            dim=3, keepdim=True
-        )  # (B, N, M, 1) - number of observations per patch
+            #     # Calculate patch coverage (how much data this patch has)
+            #     coverage = torch.sum(mask_patch, dim=2)  # (B, N, 1)
+            #     patch_coverage.append(coverage)
 
-        # Add small epsilon to avoid division by zero and ensure valid softmax
-        patch_coverage = patch_coverage + 1e-8
-        patch_weights = F.softmax(patch_coverage, dim=2)  # (B, N, M, 1)
+            # # Step 2: Stack patch representations
+            # patch_repr = torch.stack(patch_representations, dim=2)  # (B, N, M, d_model)
+            # patch_coverage = torch.stack(patch_coverage, dim=2)  # (B, N, M, 1)
 
-        # Weighted sum across patches
-        z = torch.sum(patch_weights * patch_repr, dim=2)  # (B, N, d_model)
+            # # Step 3: Cross-patch aggregation
+            # # Weight patches by how much data they contain
+            # patch_weights = F.softmax(patch_coverage, dim=2)  # (B, N, M, 1)
+
+            # # Debug prints
+            # # print(f"patch_weights shape: {patch_weights.shape}")
+            # # print(f"patch_repr shape: {patch_repr.shape}")
+
+            # # Final aggregation across patches
+            # z = torch.sum(patch_weights * patch_repr, dim=2)  # (B, N, d_model)
 
         return z
 
 
 class MixerBlock(nn.Module):
-    def __init__(self, d_model, n_channels):
+    def __init__(self, d_model, n_channels, n_heads=4):
         super().__init__()
-        self.channel_norm = RMSNorm(n_channels)  # Normalize across channels
-        self.channel_mlp = nn.Sequential(
-            nn.Linear(n_channels, n_channels), nn.ReLU(inplace=True)
+        # Multi-head attention for channel mixing (NEW)
+        self.channel_attention = nn.MultiheadAttention(
+            embed_dim=d_model, num_heads=n_heads, batch_first=True
         )
+        self.channel_norm = RMSNorm(n_channels)  # Normalize across features
+
+        # # OLD approach (commented out but preserved)
+        # self.channel_norm_old = RMSNorm(n_channels)  # Normalize across channels
+        # self.channel_mlp = nn.Sequential(
+        #     nn.Linear(n_channels, n_channels), nn.ReLU(inplace=True)
+        # )
+
+        # Keep the original hidden mixing
         self.hidden_norm = RMSNorm(d_model)  # Normalize across hidden features
         self.hidden_mlp = nn.Sequential(
             nn.Linear(d_model, d_model), nn.ReLU(inplace=True)
         )
 
     def forward(self, x):
-        # x: (B, N, D)
+        # x: (B, N, D) - batch, channels, features
 
-        # Channel mixing
+        # Channel mixing using multi-head attention (NEW)
         residual = x
-        x = self.channel_norm(x.permute(0, 2, 1)).permute(0, 2, 1)
-        x = self.channel_mlp(x.permute(0, 2, 1)).permute(0, 2, 1)
-        x = x + residual
+        # x_norm = self.channel_norm(x)  # (B, N, D)
+        x_norm = self.channel_norm(x.permute(0, 2, 1)).permute(0, 2, 1)
+        # Apply multi-head attention across channels
+        # Each channel attends to all other channels
+        attn_output, _ = self.channel_attention(
+            query=x_norm,  # (B, N, D)
+            key=x_norm,  # (B, N, D)
+            value=x_norm,  # (B, N, D)
+        )
+        x = attn_output + residual  # Residual connection
 
-        # Hidden mixing
+        # OLD channel mixing approach (commented out but preserved)
+        # residual = x
+        # x = self.channel_norm_old(x.permute(0, 2, 1)).permute(0, 2, 1)
+        # x = self.channel_mlp(x.permute(0, 2, 1)).permute(0, 2, 1)
+        # x = x + residual
+
+        # Hidden mixing (same as before)
         residual = x
         x = self.hidden_norm(x)
         x = self.hidden_mlp(x)
         x = x + residual
-
         return x
 
 
@@ -161,6 +215,7 @@ class IMTS_Mixer(nn.Module):
         self.d_time = args.te_dim
         self.n_layers = args.nlayer
         self.d_out = args.d_out if hasattr(args, "d_out") else self.d_model
+        self.n_heads = getattr(args, "n_heads", 4)  # Default 4 heads
 
         # Support both patched and non-patched data
         # Always create both aggregation modules since we'll detect format at runtime
@@ -170,7 +225,10 @@ class IMTS_Mixer(nn.Module):
         self.channel_bias = nn.Parameter(torch.randn(1, self.n_channels, self.d_model))
 
         self.mixer_blocks = nn.ModuleList(
-            [MixerBlock(self.d_model, self.n_channels) for _ in range(self.n_layers)]
+            [
+                MixerBlock(self.d_model, self.n_channels, self.n_heads)
+                for _ in range(self.n_layers)
+            ]
         )
 
         if self.d_model != self.d_out:
