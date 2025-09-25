@@ -247,7 +247,7 @@ if __name__ == "__main__":
                 args.nlayer,
                 args.lr,
             )
-        elif args.model in ["APNTSMixer", "IMTS_Mixer", "APN_IMTS_Mixer"]:
+        elif args.model in ["APNTSMixer", "APN_IMTS_Mixer"]:
             # Handle APNTSMixer, IMTS_Mixer, and APN_IMTS_Mixer with npatch parameter
             npatch = getattr(args, "npatch", "def")  # Use 'def' if npatch not available
             log_path = "logs/{}_{}_{}_{}patch_{}layer_{}lr.log".format(
