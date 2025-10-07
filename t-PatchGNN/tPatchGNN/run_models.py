@@ -23,7 +23,11 @@ from model.tPatchGNN import tPatchGNN
 from model.APN import tAPN
 from model.APNTSMixer import APNTSMixer
 from model.IMTS_Mixer import IMTS_Mixer
-from model.APN_IMTS_Mixer import APN_IMTS_Mixer
+
+# from model.APN_IMTS_Mixer import APN_IMTS_Mixer
+from model.AdaptiveIMTS_Mixer import AdaptiveIMTS_Mixer
+from model.IMTS_Mixer_FastRNN import IMTS_Mixer_FastRNN
+from model.IMTS_Mixer_Clean import IMTS_Mixer_Clean
 
 parser = argparse.ArgumentParser("IMTS Forecasting")
 
@@ -103,12 +107,26 @@ parser.add_argument(
     type=str,
     default="tPatchGNN",
     help="Model name",
-    choices=["tPatchGNN", "tAPN", "APNTSMixer", "IMTS_Mixer", "APN_IMTS_Mixer"],
+    choices=[
+        "tPatchGNN",
+        "tAPN",
+        "APNTSMixer",
+        "IMTS_Mixer",
+        "APN_IMTS_Mixer",
+        "AdaptiveIMTS_Mixer",
+        "IMTS_Mixer_FastRNN",
+        "IMTS_Mixer_Clean",
+    ],
 )
 parser.add_argument(
     "--nonpatched",
     action="store_true",
     help="Use non-patched data format (3D) instead of patched format (4D) for IMTS_Mixer",
+)
+parser.add_argument(
+    "--use_segmentation",
+    action="store_true",
+    help="Enable FastRNN segmentation for IMTS_Mixer_FastRNN model",
 )
 parser.add_argument("--outlayer", type=str, default="Linear", help="Model name")
 parser.add_argument(
@@ -146,7 +164,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 # Handle npatch calculation differently for different models
-if args.model in ["tAPN", "APNTSMixer"]:
+if args.model in ["tAPN", "APNTSMixer", "AdaptiveIMTS_Mixer"]:
     # For tAPN: use specified npatch or default to 20 adaptive patches (updated clarified default)
     if args.npatch is None:
         args.npatch = 20  # Default adaptive patches
@@ -183,7 +201,7 @@ if __name__ == "__main__":
 
     ##################################################################
     # For tAPN: Allow full temporal extent, don't constrain by history
-    if args.model in ["tAPN", "APNTSMixer"]:
+    if args.model in ["tAPN", "APNTSMixer", "AdaptiveIMTS_Mixer"]:
         # For tAPN, we want to use more of the available temporal data
         # Set history to a larger value to capture more temporal context
         if args.t_obs is None:
@@ -222,8 +240,15 @@ if __name__ == "__main__":
         model = APNTSMixer(args).to(args.device)
     elif args.model == "IMTS_Mixer":
         model = IMTS_Mixer(args).to(args.device)
+    elif args.model == "IMTS_Mixer_FastRNN":
+        model = IMTS_Mixer_FastRNN(args).to(args.device)
+    elif args.model == "IMTS_Mixer_Clean":
+        model = IMTS_Mixer_Clean(args).to(args.device)
     elif args.model == "APN_IMTS_Mixer":
-        model = APN_IMTS_Mixer(args).to(args.device)
+        # model = APN_IMTS_Mixer(args).to(args.device)
+        raise NotImplementedError("APN_IMTS_Mixer is not implemented yet")
+    elif args.model == "AdaptiveIMTS_Mixer":
+        model = AdaptiveIMTS_Mixer(args).to(args.device)
 
     ##################################################################
 
@@ -247,7 +272,7 @@ if __name__ == "__main__":
                 args.nlayer,
                 args.lr,
             )
-        elif args.model in ["APNTSMixer", "APN_IMTS_Mixer"]:
+        elif args.model in ["APNTSMixer", "APN_IMTS_Mixer", "AdaptiveIMTS_Mixer"]:
             # Handle APNTSMixer, IMTS_Mixer, and APN_IMTS_Mixer with npatch parameter
             npatch = getattr(args, "npatch", "def")  # Use 'def' if npatch not available
             log_path = "logs/{}_{}_{}_{}patch_{}layer_{}lr.log".format(
@@ -255,6 +280,18 @@ if __name__ == "__main__":
                 args.model,
                 args.state,
                 npatch,
+                args.nlayer,
+                args.lr,
+            )
+        elif args.model == "IMTS_Mixer_FastRNN":
+            # Handle FastRNN model with segmentation flag
+            seg_flag = "seg" if getattr(args, "use_segmentation", False) else "noseg"
+            log_path = "logs/{}_{}_{}_{}_{}_{}layer_{}lr.log".format(
+                args.dataset,
+                args.model,
+                args.state,
+                seg_flag,
+                "nonpatched" if getattr(args, "nonpatched", False) else "patched",
                 args.nlayer,
                 args.lr,
             )
