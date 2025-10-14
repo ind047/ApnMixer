@@ -165,11 +165,11 @@ class MixerBlock(nn.Module):
         )
         self.channel_norm = RMSNorm(n_channels)  # Normalize across features
 
-        # # OLD approach (commented out but preserved)
-        # self.channel_norm_old = RMSNorm(n_channels)  # Normalize across channels
-        # self.channel_mlp = nn.Sequential(
-        #     nn.Linear(n_channels, n_channels), nn.ReLU(inplace=True)
-        # )
+        # OLD approach (commented out but preserved)
+        self.channel_norm_old = RMSNorm(n_channels)  # Normalize across channels
+        self.channel_mlp = nn.Sequential(
+            nn.Linear(n_channels, n_channels), nn.ReLU(inplace=True)
+        )
 
         # Keep the original hidden mixing
         self.hidden_norm = RMSNorm(d_model)  # Normalize across hidden features
@@ -182,22 +182,21 @@ class MixerBlock(nn.Module):
 
         # Channel mixing using multi-head attention (NEW)
         residual = x
-        # x_norm = self.channel_norm(x)  # (B, N, D)
-        x_norm = self.channel_norm(x.permute(0, 2, 1)).permute(0, 2, 1)
-        # Apply multi-head attention across channels
-        # Each channel attends to all other channels
-        attn_output, _ = self.channel_attention(
-            query=x_norm,  # (B, N, D)
-            key=x_norm,  # (B, N, D)
-            value=x_norm,  # (B, N, D)
-        )
-        x = attn_output + residual  # Residual connection
+        # x_norm = self.channel_norm(x.permute(0, 2, 1)).permute(0, 2, 1)
+        # # Apply multi-head attention across channels
+        # # Each channel attends to all other channels
+        # attn_output, _ = self.channel_attention(
+        #     query=x_norm,  # (B, N, D)
+        #     key=x_norm,  # (B, N, D)
+        #     value=x_norm,  # (B, N, D)
+        # )
+        # x = attn_output + residual  # Residual connection
 
         # OLD channel mixing approach (commented out but preserved)
-        # residual = x
-        # x = self.channel_norm_old(x.permute(0, 2, 1)).permute(0, 2, 1)
-        # x = self.channel_mlp(x.permute(0, 2, 1)).permute(0, 2, 1)
-        # x = x + residual
+        #residual = x
+        x = self.channel_norm_old(x.permute(0, 2, 1)).permute(0, 2, 1)
+        x = self.channel_mlp(x.permute(0, 2, 1)).permute(0, 2, 1)
+        x = x + residual
 
         # Hidden mixing (same as before)
         residual = x
@@ -310,11 +309,11 @@ class IMTS_Mixer(nn.Module):
             # For non-patched data: sum over time dimension
             unobserved_mask = (observed_mask.sum(dim=1) == 0).unsqueeze(-1)  # (B, N, 1)
 
+        # Apply channel bias only to unobserved channels (corrected implementation)
         z = (
             z * (1 - unobserved_mask.float())
             + self.channel_bias * unobserved_mask.float()
         )
-        z = z + self.channel_bias
 
         # Apply mixer blocks
         for mixer_block in self.mixer_blocks:
@@ -330,7 +329,7 @@ class IMTS_Mixer(nn.Module):
             tp_to_predict.unsqueeze(1).unsqueeze(-1).repeat(1, N, 1, 1)
         )  # (B, N, Lp, d_out)
 
-        decoder_input = z * t_pred_enc
+        decoder_input = z + t_pred_enc
 
         output = self.decoder(decoder_input).squeeze(-1)  # (B, N, Lp)
 
