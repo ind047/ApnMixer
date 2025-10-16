@@ -329,7 +329,7 @@ class IMTS_Mixer(nn.Module):
             tp_to_predict.unsqueeze(1).unsqueeze(-1).repeat(1, N, 1, 1)
         )  # (B, N, Lp, d_out)
 
-        decoder_input = z + t_pred_enc
+        decoder_input = z * t_pred_enc
 
         output = self.decoder(decoder_input).squeeze(-1)  # (B, N, Lp)
 
