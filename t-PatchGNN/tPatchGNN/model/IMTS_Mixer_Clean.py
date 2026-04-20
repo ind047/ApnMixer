@@ -146,7 +146,7 @@ class MixerBlock(nn.Module):
         self.n_channels = n_channels
         
         # Channel mixing (across features)
-        self.channel_norm = nn.LayerNorm(d_model)
+        self.channel_norm = nn.LayerNorm(n_channels)
         self.channel_mlp = nn.Sequential(
             nn.Linear(n_channels, n_channels * 2),  # 2x expansion
             nn.GELU(),
