@@ -251,9 +251,12 @@ class tPatchGNN(nn.Module):
 			x = self.temporal_agg(x) # (B, N, hid_dim)
 
 		return x
+	
+	
 	def forward(self, tp_to_predict, observed_data, observed_tp, observed_mask):
         """Standard PyTorch entry point. Aliased to forecasting."""
         return self.forecasting(tp_to_predict, observed_data, observed_tp, observed_mask)
+	
 	def forecasting(self, time_steps_to_predict, X, truth_time_steps, mask = None):
 		
 		""" 
