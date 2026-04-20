@@ -365,7 +365,7 @@ class IMTS_Mixer_Clean(nn.Module):
         
     def forward(self, tp_to_predict, observed_data, observed_tp, observed_mask):
     """Standard PyTorch entry point. Aliased to forecasting."""
-    return self.forecasting(tp_to_predict, observed_data, observed_tp, observed_mask)
+        return self.forecasting(tp_to_predict, observed_data, observed_tp, observed_mask)
     
     def forecasting(self, tp_to_predict, observed_data, observed_tp, observed_mask):
         """
