@@ -316,7 +316,7 @@ if __name__ == "__main__":
     logger.info(args)
 
 
-        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info("Total Trainable Parameters: {:,}".format(total_params))
 
     try:
