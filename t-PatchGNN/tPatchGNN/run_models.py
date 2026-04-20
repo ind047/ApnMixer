@@ -250,6 +250,24 @@ if __name__ == "__main__":
     logger.info(input_command)
     logger.info(args)
 
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info("Total Trainable Parameters: {:,}".format(total_params))
+
+    try:
+        from thop import profile
+        # Grab a single batch to trace the model for FLOPs
+        sample_batch = next(iter(data_obj["train_dataloader"]))
+        tp_pred = sample_batch["tp_to_predict"].to(args.device)
+        obs_data = sample_batch["observed_data"].to(args.device)
+        obs_tp = sample_batch["observed_tp"].to(args.device)
+        obs_mask = sample_batch["observed_mask"].to(args.device)
+        
+        macs, _ = profile(model, inputs=(tp_pred, obs_data, obs_tp, obs_mask), verbose=False)
+        tflops = (macs * 2) / (10**12)  # 1 MAC = ~2 FLOPs
+        logger.info("TFLOPs per forward pass (batch_size={}): {:.8f}".format(args.batch_size, tflops))
+    except Exception as e:
+        logger.info("Skipping FLOP calculation: {}".format(e))
+
     # optimizer = optim.Adam(model.parameters(), lr=args.lr)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     scheduler = ReduceLROnPlateau(
